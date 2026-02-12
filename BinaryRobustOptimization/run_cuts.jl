@@ -55,11 +55,11 @@ function run_unit_commitment(budget_list::Vector{Int}, method_list, end_time)
     futures_results = Vector{Future}()
     for budget in budget_list
         for method in method_list
-            # problem1 = UnitCommitmentMixedRecourse2("6bus_JEAS", budget, 1)
+            # problem1 = UnitCommitment("6bus_JEAS", budget, 1)
             # push!(futures_results, @spawn BinaryRobustOptimization.run_ccg(problem1, method, end_time))
-            problem2 = UnitCommitmentMixedRecourse2("medium", budget, 5)
+            problem2 = UnitCommitment("medium", budget, 5)
             push!(futures_results, @spawn BinaryRobustOptimization.run_ccg(problem2, method, end_time))
-            # problem3 = UnitCommitmentMixedRecourse2("118_syst_JEAS", budget, 35)
+            # problem3 = UnitCommitment("118_syst_JEAS", budget, 35)
             # push!(futures_results, @spawn BinaryRobustOptimization.run_ccg(problem3, method, end_time))
         end
     end

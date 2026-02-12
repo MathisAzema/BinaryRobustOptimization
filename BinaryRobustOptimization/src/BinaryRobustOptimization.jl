@@ -1,6 +1,6 @@
 module BinaryRobustOptimization
 
-using JuMP
+using JuMP, Gurobi
 using TimerOutputs
 # using Printf, DelimitedFiles#, Distances
 using NCDatasets, CSV, DataFrames
@@ -44,7 +44,7 @@ function set_solver_Gurobi()
             global GUROBI_ENV = Gurobi.Env()
         end
     catch
-        # @warn("Unable to use Gurobi. Is it properly installed? Have you called `pkg> add Gurobi`?\nDefaulting to SCIP")
+        @warn("Unable to use Gurobi. Is it properly installed? Have you called `pkg> add Gurobi`?\nDefaulting to SCIP")
         # set_solver_SCIP()
     end
 end
@@ -84,17 +84,13 @@ function set_solver_Mosek()
 end
 
 include("problem.jl")
-include("facility.jl")
-include("network.jl")
 include("rostering.jl")
 include("unitcommitment.jl")
-include("unitcommitmentmixedrecourse.jl")
-include("unitcommitmentmixedrecourse2.jl")
 include("utilities.jl")
 include("algorithms.jl")
 
 export run_ccg, run_benders, solve_deterministic_problem, test2
-export FacilityLocation, NetworkDesign, Rostering, UnitCommitment, UnitCommitmentMixedRecourse, UnitCommitmentMixedRecourse2
+export Rostering, UnitCommitment
 export SubproblemType, LinearizedKKT, IndicatorKKT, LinearizedDual, IndicatorDual, LagrangianDual, LagrangianDualbis, Enumeration
 export MasterType, CCG, Benders
 export set_num_threads, set_solver_SCIP, set_solver_CPLEX, set_solver_Gurobi, set_solver_Mosek
