@@ -6,10 +6,12 @@ end
 function print_progress(iter, lb, ub, elapsed_time, λ=nothing, inner=false)
     elapsed_time = round(elapsed_time, digits=2)
     str = inner ? "\tinner-iter" : "iter"
+    LB=round(lb, digits=2)
+    UB=round(ub, digits=2)
     if λ === nothing
-        println("$(str) $(iter): LB = $(lb) UB = $(ub) gap = $(round(gap(ub, lb) * 100.0, digits=2))% time=$(elapsed_time)sec")
+        println("$(str) $(iter): LB = $(LB) UB = $(UB) gap = $(round(gap(ub, lb) * 100.0, digits=2))% time=$(elapsed_time)sec")
     else
-        println("$(str) $(iter): LB = $(lb) UB = $(ub) gap = $(round(gap(ub, lb) * 100.0, digits=2))% time=$(elapsed_time)sec λ = $(λ)")
+        println("$(str) $(iter): LB = $(LB) UB = $(UB) gap = $(round(gap(ub, lb) * 100.0, digits=2))% time=$(elapsed_time)sec λ = $(λ)")
     end
 end
 
@@ -41,9 +43,9 @@ function initializeJuMPModel()
         m = Model(optimizer_with_attributes(
             () -> Gurobi.Optimizer(GUROBI_ENV),
             "OutputFlag" => 0,
-            "MIPGap" => 0*0.001,
+            "MIPGap" => 0.001,
             "Threads" => THREADLIM,
-            "Presolve" => 0,
+            "Presolve" => 1, #Presolve deactivated : 0
         ))
         JuMP.set_silent(m)
         # JuMP.unset_silent(m)
@@ -53,7 +55,7 @@ function initializeJuMPModel()
         return Model(optimizer_with_attributes(
             CPLEX.Optimizer,
             "CPXPARAM_ScreenOutput" => 0,
-            "CPXPARAM_MIP_Tolerances_MIPGap" => 0,
+            "CPXPARAM_MIP_Tolerances_MIPGap" => 0.001,
             "CPXPARAM_Threads" => THREADLIM
         ))
     end

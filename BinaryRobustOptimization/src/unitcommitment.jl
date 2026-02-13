@@ -39,75 +39,6 @@ struct UnitCommitment <: AbstractProblem
     PenaltyCost::Float64
     budget::Int64
 
-    # function UnitCommitment(filename::String, budget::Int, N1::Int)
-    #     data=Dataset(filename)
-    #     Blocks=keys(data.group)
-    #     data_block=data.group[Blocks[1]]
-    #     TimeHorizon= 24
-    #     demand=round.(data_block["ActivePowerDemand"].var[:])
-    #     N=size(keys(data_block.group))[1]-1
-    #     slowunits=Vector{ThermalUnit}(undef, N1)
-    #     fastunits=Vector{ThermalUnit}(undef, N-N1)
-    #     k=0
-    #     for unit in data_block.group
-    #         if k < N
-    #             if occursin("Block", first(unit))
-    #                 unit_name=parse(Int64, split(first(unit), "_")[end])+1
-    #                 k += 1
-    #                 if k <= N1
-    #                     unit_name=k
-    #                 else
-    #                     unit_name = k - N1
-    #                 end
-    #                 type=last(unit).attrib["type"]
-    #                 if type == "ThermalUnitBlock" 
-    #                     Bus = 1
-    #                     MinPower=round.(last(unit)["MinPower"].var[1])
-    #                     MaxPower =round.(last(unit)["MaxPower"].var[1]) 
-    #                     DeltaRampUp  =round.(last(unit)["DeltaRampUp"].var[1])
-    #                     DeltaRampDown  =round.(last(unit)["DeltaRampDown"].var[1])
-    #                     QuadTerm =round(last(unit)["QuadTerm"].var[1]) 
-    #                     StartUpCost=round(last(unit)["StartUpCost"].var[1])
-    #                     StartDownCost=0.0 
-    #                     LinearTerm=round(last(unit)["LinearTerm"].var[1])
-    #                     ConstTerm=round(last(unit)["ConstTerm"].var[1])
-    #                     InitialPower=round.(last(unit)["InitialPower"].var[1])  
-    #                     InitUpDownTime =round.(last(unit)["InitUpDownTime"].var[1]) 
-    #                     MinUpTime=round.(last(unit)["MinUpTime"].var[1])  
-    #                     MinDownTime=round.(last(unit)["MinDownTime"].var[1])
-
-    #                     unit=ThermalUnit(unit_name, Bus, MinPower, MaxPower, DeltaRampUp, DeltaRampDown, QuadTerm, StartUpCost, StartDownCost, LinearTerm, ConstTerm, InitialPower, InitUpDownTime, Int64(MinUpTime), Int64(MinDownTime))
-    #                     if k <= N1
-    #                         slowunits[unit_name]=unit
-    #                     else
-    #                         fastunits[unit_name]=unit
-    #                     end
-    #                 end
-    #             end
-    #         end
-    #     end
-    #     Lines = Line[]
-    #     Demandbus=[demand]
-    #     DemandDev = [[demand[t]*1.96*0.025 for t in 1:TimeHorizon]]
-    #     BusWind=[1]
-    #     PenaltyCost = 300.0
-    #     Buses = 1
-
-    #     new(filename, 
-    #         TimeHorizon, 
-    #         N1,
-    #         N-N1, 
-    #         slowunits,
-    #         fastunits,
-    #         Buses,
-    #         Lines, 
-    #         Demandbus, 
-    #         BusWind, 
-    #         DemandDev, 
-    #         PenaltyCost,
-    #         budget)
-    # end
-
     function UnitCommitment(folder::String, budget::Int, N1::Int)
         """
         Parse the IEEE 118-bus instnace
@@ -759,4 +690,9 @@ function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP
     end
     optimize!(MP_inner)
     return obj_max
+end
+
+function return_solution(UC::UnitCommitment, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
+    name_csv = "$(UC.name)_$(subproblemtype)"*string(computational_time)
+    return name_csv, UC.T, UC.budget, computational_time, round(LB, digits=2), round(gap(UB, LB), digits=2), Time_MP_inner
 end
