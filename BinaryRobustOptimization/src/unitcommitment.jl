@@ -262,7 +262,7 @@ function init_master(UC::UnitCommitment)
     return m
 end
 
-function update_master_mixed_integer(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model, master::MasterType)
+function update_master_mixed_integer(UC::UnitCommitment, MP_outer::JuMP.Model, ξ::Vector{Int64}, master::MasterType)
     s = MP_outer[:s]
     is_on_slow = MP_outer[:is_on_slow]
     start_up_slow = MP_outer[:start_up_slow]
@@ -270,8 +270,6 @@ function update_master_mixed_integer(UC::UnitCommitment, MP_outer::JuMP.Model, M
     power_slow = MP_outer[:power_slow]
 
     if master == CCG
-        ξ = JuMP.value.(MP_inner[:ξ])
-        ξ = Float64.(Int.(round.(ξ))) # should be 0-1
 
         is_on_fast = @variable(MP_outer, [i in 1:UC.Nfast, t in 0:UC.T], Bin)
         start_up_fast = @variable(MP_outer, [i in 1:UC.Nfast, t in 1:UC.T], Bin)
@@ -452,7 +450,7 @@ function compute_lagrangian_coefficient(UC::UnitCommitment, MP_outer::JuMP.Model
     return sum(sum(UC.DemandDev))*UC.PenaltyCost/15
 end
 
-function build_second_stage_problem(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model)
+function build_second_stage_problem(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model, master_inner::SubproblemType, λ = nothing)
     is_on_slow = JuMP.value.(MP_outer[:is_on_slow])
     is_on_slow = Float64.(Int.(round.(is_on_slow)))
     start_up_slow = JuMP.value.(MP_outer[:start_up_slow])
@@ -532,103 +530,26 @@ function build_second_stage_problem(UC::UnitCommitment, MP_outer::JuMP.Model, MP
     @constraint(m, [line in UC.Lines, t in 1:UC.T], flow[line.id,t]>=-line.Fmax)
     @constraint(m, [line in UC.Lines, t in 1:UC.T], flow[line.id,t] == line.B12*(angle[line.b1,t]-angle[line.b2,t]))
 
-    @constraint(m, [t in 1:UC.T, b in 1:UC.Buses], sum(power_slow[unit.name, t] for unit in UC.slowunits if unit.Bus==b) + sum(power_fast[unit.name, t] for unit in UC.fastunits if unit.Bus==b) + power_shedding[b,t]- power_curtailement[b,t] + sum(flow[line.id, t] for line in UC.Lines if line.b2==b) - sum(flow[line.id, t] for line in UC.Lines if line.b1==b) == UC.Demandbus[b][t]+ UC.DemandDev[b][t]*ξ[t])
+    @variable(m, u[t in 1:UC.T]>=0)
+    @constraint(m, [t in 1:UC.T], u[t] <= 1)
+    @constraint(m, [t in 1:UC.T, b in 1:UC.Buses], sum(power_slow[unit.name, t] for unit in UC.slowunits if unit.Bus==b) + sum(power_fast[unit.name, t] for unit in UC.fastunits if unit.Bus==b) + power_shedding[b,t]- power_curtailement[b,t] + sum(flow[line.id, t] for line in UC.Lines if line.b2==b) - sum(flow[line.id, t] for line in UC.Lines if line.b1==b) == UC.Demandbus[b][t]+ UC.DemandDev[b][t]*u[t])
 
+    if master_inner ∈ [LagrangianDualbis]
+        α = JuMP.value.(MP_inner[:α])
+        @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast + sum(α[t]*(ξ[t]-u[t]) for t in 1:UC.T))
+    end
+    if master_inner ∈ [LagrangianDual]
+        @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:UC.T))
+    end
     return m
 end
 
-function solve_second_stage_problem_lagrangian(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model, λ::Float64)
-    is_on_slow = JuMP.value.(MP_outer[:is_on_slow])
-    is_on_slow = Float64.(Int.(round.(is_on_slow)))
-    start_up_slow = JuMP.value.(MP_outer[:start_up_slow])
-    start_up_slow = Float64.(Int.(round.(start_up_slow)))
-    start_down_slow = JuMP.value.(MP_outer[:start_down_slow])
-    start_down_slow = Float64.(Int.(round.(start_down_slow)))
-
-    power_slow = JuMP.value.(MP_outer[:power_slow])
-
+function compute_grad_lagrangian(UC::UnitCommitment, SP::JuMP.Model, MP_inner::JuMP.Model)
+    
     ξ = JuMP.value.(MP_inner[:ξ])
     ξ = Float64.(Int.(round.(ξ))) # should be 0-1
 
-    m = initializeJuMPModel()
-
-    @variable(m, is_on_fast[i in 1:UC.Nfast, t in 0:UC.T], Bin)
-    @variable(m, start_up_fast[i in 1:UC.Nfast, t in 1:UC.T], Bin)
-    @variable(m, start_down_fast[i in 1:UC.Nfast, t in 1:UC.T], Bin)
-
-    @variable(m, thermal_cost>=0)
-    @variable(m, thermal_fixed_cost_slow>=0)
-    @variable(m, thermal_fixed_cost_fast>=0)
-    @constraint(m, thermal_fixed_cost_slow>=sum(unit.ConstTerm*is_on_slow[unit.name, t]+unit.StartUpCost*start_up_slow[unit.name, t]+unit.StartDownCost*start_down_slow[unit.name, t] for unit in UC.slowunits for t in 1:UC.T))
-    @constraint(m, thermal_fixed_cost_fast>=sum(unit.ConstTerm*is_on_fast[unit.name, t]+unit.StartUpCost*start_up_fast[unit.name, t]+unit.StartDownCost*start_down_fast[unit.name, t] for unit in UC.fastunits for t in 1:UC.T))
-
-    @constraint(m,  [unit in UC.slowunits, t in 1:UC.T], is_on_slow[unit.name, t]-is_on_slow[unit.name, t-1]==start_up_slow[unit.name, t]-start_down_slow[unit.name, t])
-    @constraint(m,  [unit in UC.slowunits, t in 1:UC.T], start_up_slow[unit.name, t]<=is_on_slow[unit.name, t])
-    @constraint(m,  [unit in UC.slowunits, t in 1:UC.T], start_down_slow[unit.name, t]<=1-is_on_slow[unit.name, t])
-    @constraint(m,  [unit in UC.slowunits, t in 1:UC.T], sum(start_up_slow[unit.name, τ] for τ in max(1, t-unit.MinUpTime+1):t)+1*(t<unit.MinUpTime-unit.InitUpDownTime+1)*(unit.InitUpDownTime>0) <= is_on_slow[unit.name, t])
-    @constraint(m,  [unit in UC.slowunits, t in 1:UC.T], sum(start_down_slow[unit.name, τ] for τ in max(1, t-unit.MinDownTime+1):t)+1*(t<unit.MinDownTime+unit.InitUpDownTime+1)*(unit.InitUpDownTime<0) <= 1-is_on_slow[unit.name, t])
-    @constraint(m,  [unit in UC.slowunits], is_on_slow[unit.name, 0]==(unit.InitUpDownTime>=0))
-
-    for unit in UC.slowunits
-        if (unit.InitialPower-unit.MinPower)/unit.DeltaRampDown <0
-            limit=-1
-        else
-            limit=Int64(ceil((unit.InitialPower-unit.MinPower)/unit.DeltaRampDown))
-        end
-        for t in 0:limit
-            @constraint(m, is_on_slow[unit.name, t]==1)
-        end
-    end
-
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], is_on_fast[unit.name, t]-is_on_fast[unit.name, t-1]==start_up_fast[unit.name, t]-start_down_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], start_up_fast[unit.name, t]<=is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], start_down_fast[unit.name, t]<=1-is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], sum(start_up_fast[unit.name, τ] for τ in max(1, t-unit.MinUpTime+1):t)+1*(t<unit.MinUpTime-unit.InitUpDownTime+1)*(unit.InitUpDownTime>0) <= is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], sum(start_down_fast[unit.name, τ] for τ in max(1, t-unit.MinDownTime+1):t)+1*(t<unit.MinDownTime+unit.InitUpDownTime+1)*(unit.InitUpDownTime<0) <= 1-is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits], is_on_fast[unit.name, 0]==(unit.InitUpDownTime>=0))
-    for unit in UC.fastunits
-        if (unit.InitialPower-unit.MinPower)/unit.DeltaRampDown <0
-            limit=-1
-        else
-            limit=Int64(ceil((unit.InitialPower-unit.MinPower)/unit.DeltaRampDown))
-        end
-        for t in 0:limit
-            @constraint(m, is_on_fast[unit.name, t]==1)
-        end
-    end
-
-    @variable(m, power_fast[i in 1:UC.Nfast, t in 0:UC.T] >= 0)
-    @variable(m, power_shedding[b in 1:UC.Buses, t in 1:UC.T] >= 0)
-    @variable(m, power_curtailement[b in 1:UC.Buses, t in 1:UC.T] >= 0)
-
-    @constraint(m,  [unit in UC.fastunits], power_fast[unit.name, 0]==unit.InitialPower)
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], power_fast[unit.name, t]<=unit.MaxPower*is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], power_fast[unit.name, t]>=unit.MinPower*is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], power_fast[unit.name, t]-power_fast[unit.name, t-1]<=-unit.DeltaRampUp*start_up_fast[unit.name, t]-unit.MinPower*is_on_fast[unit.name, t-1] + (unit.MinPower+unit.DeltaRampUp)*is_on_fast[unit.name, t])
-    @constraint(m,  [unit in UC.fastunits, t in 1:UC.T], power_fast[unit.name, t-1]-power_fast[unit.name, t]<=-unit.DeltaRampDown*start_down_fast[unit.name, t] - unit.MinPower*is_on_fast[unit.name, t] + (unit.MinPower+unit.DeltaRampDown)*is_on_fast[unit.name, t-1])
-
-
-    @constraint(m, thermal_cost >= sum(unit.LinearTerm*power_slow[unit.name, t] for unit in UC.slowunits for t in 1:UC.T) + sum(unit.LinearTerm*power_fast[unit.name, t] for unit in UC.fastunits for t in 1:UC.T) + UC.PenaltyCost*sum(power_shedding[b,t] + power_curtailement[b,t] for b in 1:UC.Buses for t in 1:UC.T))
-
-    @variable(m, flow[l in 1:length(UC.Lines), t in 1:UC.T])
-    @variable(m, angle[b in 1:UC.Buses, t in 1:UC.T])
-    @constraint(m, [line in UC.Lines, t in 1:UC.T], flow[line.id,t]<=line.Fmax)
-    @constraint(m, [line in UC.Lines, t in 1:UC.T], flow[line.id,t]>=-line.Fmax)
-    @constraint(m, [line in UC.Lines, t in 1:UC.T], flow[line.id,t] == line.B12*(angle[line.b1,t]-angle[line.b2,t]))
-
-    @variable(m, u[1:UC.T] >= 0)
-    @constraint(m, [t in 1:UC.T], u[t] <= 1)
-
-    @constraint(m, [t in 1:UC.T, b in 1:UC.Buses], sum(power_slow[unit.name, t] for unit in UC.slowunits if unit.Bus==b) + sum(power_fast[unit.name, t] for unit in UC.fastunits if unit.Bus==b) + power_shedding[b,t]- power_curtailement[b,t] + sum(flow[line.id, t] for line in UC.Lines if line.b2==b) - sum(flow[line.id, t] for line in UC.Lines if line.b1==b) == UC.Demandbus[b][t]+ UC.DemandDev[b][t]*u[t])
-
-    @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast +sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:UC.T))
-
-    optimize!(m)
-
-    step = sum(((1 - 2ξ[t])*value(u[t])) + ξ[t] for t in 1:UC.T)
-
-    # println((λ, step))
-
+    step = sum(((1 - 2ξ[t])*value(SP[:u][t])) + ξ[t] for t in 1:UC.T)
     return step
 end
 
@@ -651,9 +572,7 @@ function record_discrete_second_stage_decision(UC::UnitCommitment, SP_inner::JuM
     return in_list
 end
 
-function record_scenario(UC::UnitCommitment, MP_inner::JuMP.Model, scenario_list::Dict)
-    ξ = JuMP.value.(MP_inner[:ξ])
-    ξ = Int.(round.(ξ)) # should be 0-1
+function record_scenario(UC::UnitCommitment, ξ::Vector{Int64}, scenario_list::Dict)
     demandDeviations = Vector{Int}()
     for t in 1:UC.T
         if ξ[t] == 1
@@ -669,7 +588,7 @@ function record_scenario(UC::UnitCommitment, MP_inner::JuMP.Model, scenario_list
     return in_list
 end
 
-function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model)
+function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model, time_limit::Float64)
     possible_scenarios = generate_all_Γ_tuple(UC.T, UC.budget)
     obj_max = -1
     worstcase_scenario = nothing
@@ -679,7 +598,10 @@ function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP
         end
         optimize!(MP_inner)
         SP = build_second_stage_problem(UC, MP_outer, MP_inner)
-        lb = solve_SP(UC, SP, 10.0)
+        lb = solve_SP(UC, SP, time_limit)
+        if isnan(lb)
+            return NaN
+        end
         if lb > obj_max
             obj_max = lb
             worstcase_scenario = scenario
@@ -693,6 +615,6 @@ function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP
 end
 
 function return_solution(UC::UnitCommitment, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
-    name_csv = "$(UC.name)_$(subproblemtype)"*string(computational_time)
+    name_csv = "$(UC.name)_$(subproblemtype)_"*string(Int(computational_time))
     return name_csv, UC.T, UC.budget, computational_time, round(LB, digits=2), round(gap(UB, LB), digits=2), Time_MP_inner
 end

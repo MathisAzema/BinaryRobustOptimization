@@ -92,7 +92,7 @@ function solve_MP(problem::AbstractProblem, MP::JuMP.Model, time_limit::Float64)
         @warn("potentially infeasible problem instance")
         return +Inf
     end
-    return objective_scale(problem) * objective_value(MP)
+    return objective_scale(problem) * objective_bound(MP)
 end
 
 function solve_SP(problem::AbstractProblem, SP::JuMP.Model, time_limit::Float64)
@@ -113,7 +113,7 @@ function solve_SP(problem::AbstractProblem, SP::JuMP.Model, time_limit::Float64)
     if status == MOI.OBJECTIVE_LIMIT
         return -Inf
     end
-    return objective_scale(problem) * objective_value(SP)
+    return objective_scale(problem) * objective_bound(SP)
 end
 
 function debug_repeated_scenarios(scenario_list::Dict, masterproblemtype::MasterType, problem::AbstractProblem, SP::JuMP.Model, LB::Float64, UB::Float64, found_infeasible_scenario::Bool)

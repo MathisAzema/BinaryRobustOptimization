@@ -228,15 +228,3 @@ The Lagrangian coefficient `λ` must be `Float64` if `master_inner == Lagrangian
 Must be implemented if `mixed_integer_recourse(problem) = true`.
 """
 function update_master_inner_level end
-
-"""
-    build_master_inner_level_check(problem::AbstractProblem, MP_outer::JuMP.Model, discrete_decision_list::Dict)
-
-Return the JuMP model of the inner-level master problem,
-which also computes an optimal Lagrangian coefficient,
-based on the optimal values of the solved outer-level master problem `MP_outer`.
-
-Must be implemented if `mixed_integer_recourse(problem) = true`.
-"""
-function build_master_inner_level_check end
-

@@ -5,6 +5,7 @@ using Random
 Default implementation of `Rostering` problem.
 """
 mutable struct Rostering <: AbstractProblem
+    name::String
     I::Int
     J::Int
     T::Int
@@ -60,7 +61,8 @@ mutable struct Rostering <: AbstractProblem
             DemandDev[t] = 0.05*DemandAvg[t]
         end
 
-        new(I,
+        new(string(seed)*"_"*string(T),
+            I,
             J,
             T,
             N,
@@ -159,13 +161,11 @@ function init_master(R::Rostering)
     return m
 end
 
-function update_master_mixed_integer(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model, master::MasterType)
+function update_master_mixed_integer(R::Rostering, MP_outer::JuMP.Model, ξ::Vector{Int64}, master::MasterType)
     s = MP_outer[:s]
     x = MP_outer[:x]
 
     if master == CCG
-        g = JuMP.value.(MP_inner[:g])
-        g = Float64.(Int.(round.(g))) # should be 0-1
 
         y = @variable(MP_outer, [1:R.J,1:R.T], Bin)
         z = @variable(MP_outer, [1:R.J,1:R.T], lower_bound = 0)
@@ -184,7 +184,7 @@ function update_master_mixed_integer(R::Rostering, MP_outer::JuMP.Model, MP_inne
             z[j,t] <= R.N*y[j,t]
         )
         @constraint(MP_outer, [t in 1:R.T],
-            sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*g[t])
+            sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*ξ[t])
         )
         @constraint(MP_outer,
             s >= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
@@ -202,7 +202,7 @@ end
 function init_master_inner_level(R::Rostering, master_inner::SubproblemType)
     m = initializeJuMPModel()
 
-    @variable(m, g[1:R.T], Bin)
+    @variable(m, ξ[1:R.T], Bin)
     @variable(m, s,
         upper_bound = sum(R.FixedCostRegular) +
                       sum(R.FixedCostPartTime) +
@@ -210,16 +210,16 @@ function init_master_inner_level(R::Rostering, master_inner::SubproblemType)
                       sum((R.DemandAvg[t] + R.DemandDev[t])*R.PenaltyCost[t] for t in 1:R.T)
     )
     @constraint(m,
-        sum(g[t] for t in 1:R.T) <= R.budget
+        sum(ξ[t] for t in 1:R.T) <= R.budget
     )
     @objective(m, Max, s)
 
     if master_inner ∈ [LagrangianDualbis]
         @variable(m, μ[1:R.T]>=0)
         @variable(m, δ[1:R.T]>=0)
-        @constraint(m, [t in 1:R.T], δ[t] <= R.DemandDev[t]*R.PenaltyCost[t]*g[t])
+        @constraint(m, [t in 1:R.T], δ[t] <= R.DemandDev[t]*R.PenaltyCost[t]*ξ[t])
         @constraint(m, [t in 1:R.T], δ[t] <= μ[t])
-        # @constraint(m, [t in 1:R.T], δ[t] >= μ[t] - R.DemandDev[t]*R.PenaltyCost[t]*(1 - g[t]))
+        # @constraint(m, [t in 1:R.T], δ[t] >= μ[t] - R.DemandDev[t]*R.PenaltyCost[t]*(1 - ξ[t]))
     end
 
     return m
@@ -227,13 +227,13 @@ end
 
 function init_master_inner_level(R::Rostering, MP_inner::JuMP.Model)
     
-    gval = JuMP.value.(MP_inner[:g])
-    gval = Float64.(Int.(round.(gval))) # should be 0-1
+    ξval = JuMP.value.(MP_inner[:ξ])
+    ξval = Float64.(Int.(round.(ξval))) # should be 0-1
 
     m = initializeJuMPModel()
-    @variable(m, g[1:R.T])
+    @variable(m, ξ[1:R.T])
     @objective(m, Max, 0)
-    fix.(g, gval)
+    fix.(ξ, ξval)
     optimize!(m)
 
     return m
@@ -278,7 +278,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         # end
     end
     s = MP_inner[:s]
-    g = MP_inner[:g]
+    ξ = MP_inner[:ξ]
 
     # dual variables (common to all)
     α = @variable(MP_inner, [1:R.J,1:R.T], lower_bound = 0)
@@ -313,7 +313,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
             z[j,t] <= R.N*y[j,t]
         )
         @constraint(MP_inner, [t in 1:R.T],
-            sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*g[t])
+            sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*ξ[t])
         )
 
         # complementary slackness
@@ -328,7 +328,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
                 β[t] <= R.PenaltyCost[t]*(1 - Iβ[t])
             )
             @constraint(MP_inner, [t in 1:R.T],
-                sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] - (R.DemandAvg[t] + (R.DemandDev[t]*g[t])) <= R.I*R.N*Iβ[t]
+                sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] - (R.DemandAvg[t] + (R.DemandDev[t]*ξ[t])) <= R.I*R.N*Iβ[t]
             )
             @constraint(MP_inner, [j in 1:R.J, t in 1:R.T],
                 z[j,t] <= R.N*(1 - Iz[j,t])
@@ -355,7 +355,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
                 Iβ[t] => {β[t] <= 0}
             )
             @constraint(MP_inner, [t in 1:R.T],
-                !Iβ[t] => {sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] - (R.DemandAvg[t] + (R.DemandDev[t]*g[t])) <= 0}
+                !Iβ[t] => {sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] - (R.DemandAvg[t] + (R.DemandDev[t]*ξ[t])) <= 0}
             )
             @constraint(MP_inner, [j in 1:R.J, t in 1:R.T],
                 Iz[j,t] => {z[j,t] <= 0}
@@ -383,10 +383,10 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         )
         if master_inner == LinearizedDual
             @constraint(MP_inner, [t in 1:R.T],
-                βg[t] >= β[t] - (R.PenaltyCost[t]*(1 - g[t]))
+                βg[t] >= β[t] - (R.PenaltyCost[t]*(1 - ξ[t]))
             )
             @constraint(MP_inner, [t in 1:R.T],
-                βg[t] <= R.PenaltyCost[t]*g[t]
+                βg[t] <= R.PenaltyCost[t]*ξ[t]
             )
             @constraint(MP_inner, [t in 1:R.T],
                 βg[t] <= β[t]
@@ -394,10 +394,10 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         end
         if master_inner == IndicatorDual
             @constraint(MP_inner, [t in 1:R.T],
-                g[t] => {βg[t] == β[t]}
+                ξ[t] => {βg[t] == β[t]}
             )
             @constraint(MP_inner, [t in 1:R.T],
-                !g[t] => {βg[t] == 0}
+                !ξ[t] => {βg[t] == 0}
             )
         end
     end
@@ -415,7 +415,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
                 +sum(λ*g[t] for t in 1:R.T)
         )
         @constraint(MP_inner, [t in 1:R.T],
-            -γ[t] - (R.DemandDev[t]*β[t]) <= λ*(1 - 2g[t])
+            -γ[t] - (R.DemandDev[t]*β[t]) <= λ*(1 - 2*ξ[t])
         )
         =#
         ###= scale gamma
@@ -429,10 +429,10 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
                 +sum(λ*γ[t] for t in 1:R.T)
         )
         @constraint(MP_inner, [t in 1:R.T],
-            γ[t] <= g[t]
+            γ[t] <= ξ[t]
         )
         @constraint(MP_inner, [t in 1:R.T],
-            γ[t] <= (R.DemandDev[t]*β[t]/λ) + (1 - g[t])
+            γ[t] <= (R.DemandDev[t]*β[t]/λ) + (1 - ξ[t])
         )
         ##=#
     end
@@ -476,57 +476,6 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
     end
 end
 
-# function build_master_inner_level_check(R::Rostering, MP_outer::JuMP.Model, discrete_decision_list::Dict)
-#     MP_inner_check = init_master_inner_level(R)
-#     s = MP_inner_check[:s]
-#     g = MP_inner_check[:g]
-
-#     x = JuMP.value.(MP_outer[:x])
-#     x = Float64.(Int.(round.(x))) # should be 0-1
-
-#     y_all = collect(keys(discrete_decision_list))
-#     V = length(y_all)
-
-#     # dual variables (common to all)
-#     α = @variable(MP_inner_check, [1:V,1:R.J,1:R.T], lower_bound = 0)
-#     β = @variable(MP_inner_check, [1:V,1:R.T], lower_bound = 0)
-
-#     @constraint(MP_inner_check, [v in 1:V, j in 1:R.J, t in 1:R.T],
-#         -α[v,j,t] + β[v,t] <= R.HourlyCostPartTime[j,t]
-#     )
-#     @constraint(MP_inner_check, [v in 1:V, t in 1:R.T],
-#         β[v,t] <= R.PenaltyCost[t]
-#     )
-
-#     @variable(MP_inner_check, γ[1:V,1:R.T])
-#     for v in 1:V
-#         y = zeros(R.J, R.T)
-#         for (j, t) in y_all[v]
-#             y[j,t] = 1
-#         end
-#         @constraint(MP_inner_check,
-#             s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-#                 +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-#                 -sum(R.N*y[j,t]*α[v,j,t] for j in 1:R.J, t in 1:R.T)
-#                 +sum(R.DemandAvg[t]*β[v,t] for t in 1:R.T)
-#                 -sum(R.N*x[i,t]*β[v,t] for i in 1:R.I, t in 1:R.T)
-#                 +sum(γ[v,t] for t in 1:R.T)
-#         )
-#         @constraint(MP_inner_check, [t in 1:R.T],
-#             !g[t] => {γ[v,t] <=  0}
-#         )
-#         @constraint(MP_inner_check, [t in 1:R.T],
-#             g[t] => {γ[v,t] <= (R.DemandDev[t]*β[v,t])}
-#         )
-#     end
-
-#     return MP_inner_check
-# end
-
-# function init_lagrangian_coefficient(R::Rostering, MP_inner_check::JuMP.Model)
-#     return maximum(value.(MP_inner_check[:γ]))
-# end
-
 function compute_lagrangian_coefficient(R::Rostering, MP_outer::JuMP.Model)
     x = JuMP.value.(MP_outer[:x])
     x = Float64.(Int.(round.(x))) # should be 0-1
@@ -548,24 +497,16 @@ function compute_lagrangian_coefficient(R::Rostering, MP_outer::JuMP.Model)
     return U - L
 end
 
-function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model)
+function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model, master_inner::SubproblemType, λ = nothing)
     x = JuMP.value.(MP_outer[:x])
     x = Float64.(Int.(round.(x))) # should be 0-1
-    g = JuMP.value.(MP_inner[:g])
-    g = Float64.(Int.(round.(g))) # should be 0-1
-
+    ξ = JuMP.value.(MP_inner[:ξ])
+    ξ = Float64.(Int.(round.(ξ))) # should be 0-1
     m = initializeJuMPModel()
 
     @variable(m, y[1:R.J,1:R.T], Bin)
     @variable(m, z[1:R.J,1:R.T] >= 0)
     @variable(m, w[1:R.T] >= 0)
-
-    @objective(m, Min,
-        +sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-        +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-        +sum(R.HourlyCostPartTime[j,t]*z[j,t] for j in 1:R.J, t in 1:R.T)
-        +sum(R.PenaltyCost[t]*w[t] for t in 1:R.T)
-    )
 
     @constraint(m, [j in 1:R.J, t in 1:(R.T-1)],
         y[j,t] + y[j,t+1] <= 1
@@ -579,56 +520,37 @@ function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner
     @constraint(m, [j in 1:R.J, t in 1:R.T],
         z[j,t] <= R.N*y[j,t]
     )
-    @constraint(m, [t in 1:R.T],
-        sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*g[t])
-    )
 
-    return m
-end
+    @variable(m, u[t in 1:R.T]>=0)
+    @constraint(m, [t in 1:R.T], u[t] <= 1)
 
-function solve_second_stage_problem_lagrangian(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model, λ::Float64)
-    x = JuMP.value.(MP_outer[:x])
-    x = Float64.(Int.(round.(x))) # should be 0-1
-    g = JuMP.value.(MP_inner[:g])
-    g = Float64.(Int.(round.(g))) # should be 0-1
-
-    m = initializeJuMPModel()
-
-    @variable(m, y[1:R.J,1:R.T], Bin)
-    @variable(m, z[1:R.J,1:R.T] >= 0)
-    @variable(m, w[1:R.T] >= 0)
-    @variable(m, 0 <= u[1:R.T] <= 1)
-
-    @objective(m, Min,
-        +sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-        +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-        +sum(R.HourlyCostPartTime[j,t]*z[j,t] for j in 1:R.J, t in 1:R.T)
-        +sum(R.PenaltyCost[t]*w[t] for t in 1:R.T)
-        +sum(λ*(((1 - 2g[t])*u[t]) + g[t]) for t in 1:R.T)
-    )
-
-    @constraint(m, [j in 1:R.J, t in 1:(R.T-1)],
-        y[j,t] + y[j,t+1] <= 1
-    )
-    @constraint(m, [j in 1:R.J],
-        sum(y[j,t] for t in 1:R.T) <= R.MaxShiftsPartTime[j]
-    )
-    @constraint(m, [j in 1:R.J],
-        sum(y[j,t] for t in 1:R.T) >= R.MinShiftsPartTime[j]
-    )
-    @constraint(m, [j in 1:R.J, t in 1:R.T],
-        z[j,t] <= R.N*y[j,t]
-    )
     @constraint(m, [t in 1:R.T],
         sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*u[t])
     )
 
-    optimize!(m)
+    hexpr = @expression(m, sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
+            +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
+            +sum(R.HourlyCostPartTime[j,t]*z[j,t] for j in 1:R.J, t in 1:R.T)
+            +sum(R.PenaltyCost[t]*w[t] for t in 1:R.T)
+    )
+        
+    if master_inner ∈ [LagrangianDualbis]
+        μ = JuMP.value.(MP_inner[:μ])
+        @objective(m, Min, hexpr + sum(μ[t]*(ξ[t]-u[t]) for t in 1:R.T))
+    end
+    if master_inner ∈ [LagrangianDual]
+        @objective(m, Min, hexpr + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:R.T))
+    end
 
-    step = sum(((1 - 2g[t])*value(u[t])) + g[t] for t in 1:R.T)
+    return m
+end
 
-    # println((λ, step))
+function compute_grad_lagrangian(R::Rostering, SP::JuMP.Model, MP_inner::JuMP.Model)
+    
+    ξ = JuMP.value.(MP_inner[:ξ])
+    ξ = Float64.(Int.(round.(ξ))) # should be 0-1
 
+    step = sum(((1 - 2ξ[t])*value(SP[:u][t])) + ξ[t] for t in 1:R.T)
     return step
 end
 
@@ -650,12 +572,10 @@ function record_discrete_second_stage_decision(R::Rostering, SP_inner::JuMP.Mode
     return in_list
 end
 
-function record_scenario(R::Rostering, MP_inner::JuMP.Model, scenario_list::Dict)
-    g = JuMP.value.(MP_inner[:g])
-    g = Int.(round.(g)) # should be 0-1
+function record_scenario(R::Rostering, ξ::Vector{Int64}, scenario_list::Dict)
     demandDeviations = Vector{Int}()
     for t in 1:R.T
-        if g[t] == 1
+        if ξ[t] == 1
             push!(demandDeviations, t)
         end
     end
@@ -671,13 +591,13 @@ end
 function solve_MP_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vector{Float64}, scenario_list::Dict)
     println("FW inner level solving...")
     println([t for t in 1:R.T if previous_scenario[t] > 1e-6])
-    g_k = ones(R.T)
-    g_k1 = previous_scenario
+    ξ_k = ones(R.T)
+    ξ_k1 = previous_scenario
     k = 0
-    while 0 <= k <= 50 && sum(abs.(g_k1 .- g_k)) >= 1
-        g_k = copy(g_k1)
+    while 0 <= k <= 50 && sum(abs.(ξ_k1 .- ξ_k)) >= 1
+        ξ_k = copy(ξ_k1)
         k += 1
-        JuMP.fix.(MP_inner[:g], g_k; force = true)
+        JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
         optimize!(MP_inner)
         println(JuMP.objective_value(MP_inner))
         # μval2 = JuMP.value.(MP_inner[:μ])
@@ -689,9 +609,9 @@ function solve_MP_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vect
         # g_k1 = zeros(R.T)
         # budget_indices = partialsort(1:R.T, 1:min(R.budget, R.T), by=i->-μval[i])
         # g_k1[budget_indices] .= 1
-        g_k1 = determine_gradient_FW(R, MP_inner, scenario_list)
-        JuMP.unfix.(MP_inner[:g])
-        println(sum(abs.(g_k1 .- g_k)))
+        ξ_k1 = determine_gradient_FW(R, MP_inner, scenario_list)
+        JuMP.unfix.(MP_inner[:ξ])
+        println(sum(abs.(ξ_k1 .- ξ_k)))
     end
     println("FW inner level finished.")
 end
@@ -699,41 +619,49 @@ end
 function determine_gradient_FW(R::Rostering, MP_inner::JuMP.Model, scenario_list::Dict)
     # println(scenario_list)
     m = initializeJuMPModel()
-    @variable(m, g[1:R.T]>=0)
-    @constraint(m, sum(g[t] for t in 1:R.T) <= R.budget)
-    @constraint(m, [t in 1:R.T], g[t] <= 1)
-    @constraint(m, [key in keys(scenario_list)], sum(g[t] for t in key) <= R.budget - 1)
+    @variable(m, ξ[1:R.T]>=0)
+    @constraint(m, sum(ξ[t] for t in 1:R.T) <= R.budget)
+    @constraint(m, [t in 1:R.T], ξ[t] <= 1)
+    @constraint(m, [key in keys(scenario_list)], sum(ξ[t] for t in key) <= R.budget - 1)
     μval2 = JuMP.value.(MP_inner[:μ])
     if length(R.β) >= 1
         μval = [minimum([value(R.γ[i][t]) + R.DemandDev[t]*value(R.β[i][t]) for i in 1:length(R.β)]) for t in 1:R.T]
     else
         μval = JuMP.value.(MP_inner[:μ])
     end
-    @objective(m, Max, sum(μval[t]*g[t] for t in 1:R.T))
+    @objective(m, Max, sum(μval[t]*ξ[t] for t in 1:R.T))
     optimize!(m)
-    println([t for t in 1:R.T if JuMP.value(m[:g][t]) > 1e-6])
-    return JuMP.value.(m[:g])
+    println([t for t in 1:R.T if JuMP.value(m[:ξ][t]) > 1e-6])
+    return JuMP.value.(m[:ξ])
 end
 
-function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model)
+function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model, time_limit::Float64)
     possible_scenarios = generate_all_Γ_tuple(R.T, R.budget)
     obj_max = -1
     worstcase_scenario = nothing
     for scenario in possible_scenarios
         for t in 1:R.T
-            fix(MP_inner[:g][t], scenario[t])
+            fix(MP_inner[:ξ][t], scenario[t])
         end
         optimize!(MP_inner)
         SP = build_second_stage_problem(R, MP_outer, MP_inner)
-        lb = solve_SP(R, SP, 10.0)
+        lb = solve_SP(R, SP, time_limit)
+        if isnan(lb)
+            return NaN
+        end
         if lb > obj_max
             obj_max = lb
             worstcase_scenario = scenario
         end
     end
     for t in 1:R.T
-        fix(MP_inner[:g][t], worstcase_scenario[t])
+        fix(MP_inner[:ξ][t], worstcase_scenario[t])
     end
     optimize!(MP_inner)
     return obj_max
+end
+
+function return_solution(R::Rostering, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
+    name_csv = "$(R.name)_$(subproblemtype)_"*string(Int(computational_time))
+    return name_csv, R.T, R.budget, computational_time, round(LB, digits=2), round(gap(UB, LB), digits=2), Time_MP_inner
 end

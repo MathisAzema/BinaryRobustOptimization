@@ -39,141 +39,131 @@ function run_ccg_mixed_integer_recourse(
     @assert subproblemtype != LagrangianDual || !indicator_uncertainty(problem)
 
     masterproblemtype = CCG
-    algname = "$(subproblemtype)-$(masterproblemtype)"
     LB = -Inf
     UB = +Inf
     iter = 0
     start_t = time()
     iter_inner = Vector{Int}()
+    scenario_list = Dict()
 
     MP_outer = init_master(problem)
-    scenario_list = Dict()
+
+    ξ = [0 for t in 1:problem.T]
 
     λ = nothing
     if subproblemtype == LagrangianDual
         λ = 1.0
     end
 
-    previous_scenario = zeros(21)
-
     Time_MP_inner = Vector{Vector{Float64}}()
 
-    @timeit algname begin
-        while time() - start_t <= time_limit && iter <= 10
-            iter += 1
-            push!(iter_inner, 0)
+    while time() - start_t <= time_limit
+        iter += 1
+        push!(iter_inner, 0)
 
-            lb = solve_MP(problem, MP_outer, time_limit - (time() - start_t))
-            !isnan(lb) && (LB = lb) # normal termination (optimal or infeasible)
-            !isfinite(lb) && break  # infeasible or non-normal termination
+        # unset_silent(MP_outer)
+        lb = solve_MP(problem, MP_outer, time_limit - (time() - start_t))
+        if !isfinite(lb) 
+            break  # infeasible or non-normal termination
+        end
+        LB = max(LB, lb)
 
-            @timeit "$algname-InnerLevel" begin
-                LB_inner = -Inf
-                UB_inner = +Inf
-                MP_inner = init_master_inner_level(problem, subproblemtype)
-                MP_inner_opt = nothing
-                discrete_decision_list = Dict()
+        LB_inner = -Inf
+        UB_inner = +Inf
+        MP_inner = init_master_inner_level(problem, subproblemtype)
+        discrete_decision_list = Dict()
+
+        if subproblemtype == LagrangianDual
+            λ = max(λ, compute_lagrangian_coefficient(problem, MP_outer))
+        end
+
+        normal_termination = true
+
+        Time_MP_inner_iter = Float64[]
+        if subproblemtype == Enumeration
+            start_inner = time()
+            ub = solve_MP_inner_enumeration(problem, MP_outer, MP_inner, time_limit - (time() - start_t))
+            push!(Time_MP_inner, [time() - start_inner])
+            if isnan(ub) # non-normal termination
+                normal_termination = false
+            else 
+                UB = min(UB, ub)
+            end
+        else
+            while time() - start_t <= time_limit
+                iter_inner[end] += 1
+                start = time()
+                ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
+                push!(Time_MP_inner_iter, time()-start)
+
+                if isnan(ub) # non-normal termination
+                    normal_termination = false
+                    break
+                end
+                UB_inner = min(UB_inner, ub)
+
+                SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
+                lb = solve_SP(problem, SP, time_limit - (time() - start_t))
+
+                if !isfinite(lb) # non-normal termination
+                    normal_termination = false
+                    break
+                end
+                # LB_inner = max(lb, LB_inner)
+                if lb > LB_inner
+                    LB_inner = lb
+                    for t in 1:problem.T
+                        ξ[t] = Float64.(Int.(value(MP_inner[:ξ][t])))
+                    end
+                end
 
                 if subproblemtype == LagrangianDual
-                    @timeit "compute_lagrangian_parameter" begin
-                        λ = max(λ, compute_lagrangian_coefficient(problem, MP_outer))
-                    end
-                end
-
-                normal_termination = true
-
-                # scenario_list_inner = Dict()
-
-                Time_MP_inner_iter = Float64[]
-                if subproblemtype == Enumeration
-                    start_inner = time()
-                    ub = solve_MP_inner_enumeration(problem, MP_outer, MP_inner)
-                    UB = min(UB, ub)
-                    MP_inner_opt = init_master_inner_level(problem, MP_inner)
-                    push!(Time_MP_inner, [time() - start_inner])
-                else
-                    while time() - start_t <= time_limit #&& iter_inner[end]<=60
-                        iter_inner[end] += 1
-                        # if subproblemtype == LagrangianDualbis
-                        #     solve_MP_FW(problem, MP_inner, previous_scenario, scenario_list_inner)
-                        # end 
-                        start = time()
-                        ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
-                        push!(Time_MP_inner_iter, time()-start)
-
-                        if isnan(ub) # non-normal termination
-                            normal_termination = false
+                    while true
+                        step = compute_grad_lagrangian(problem, SP, MP_inner)
+                        if step <= feas_tol
                             break
                         end
-                        UB_inner = ub
-                        UB = min(UB, UB_inner)
-
-                        SP = build_second_stage_problem(problem, MP_outer, MP_inner)
+                        λ *= 2.0
+                        SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
                         lb = solve_SP(problem, SP, time_limit - (time() - start_t))
-                        if !isfinite(lb) # non-normal termination
-                            normal_termination = false
-                            break
-                        end
-                        if lb > LB_inner
-                            # previous_scenario = JuMP.value.(MP_inner[:g])
-                            LB_inner = lb
-                            MP_inner_opt = init_master_inner_level(problem, MP_inner)
-                            # if gap(LB_inner, LB) > 10.0*opt_tol
-                            #     break
-                            # end
-                        end
-                        if subproblemtype == LagrangianDual
-                            record_discrete_second_stage_decision(problem, SP, discrete_decision_list)
-                            while true
-                                @timeit "solve_second_stage_problem_lagrangian" begin
-                                    step = solve_second_stage_problem_lagrangian(problem, MP_outer, MP_inner, λ)
-                                end
-                                if step <= feas_tol
-                                    break
-                                end
-                                λ *= 2.0
-                            end
-                        end
-
-                        # Print progress
-                        print_progress(iter_inner[end], LB_inner, UB_inner, time() - start_t, λ, true)
-
-                        # Terminate or update master
-                        if gap(UB_inner, LB_inner) > opt_tol
-                            update_master_inner_level(problem, MP_outer, MP_inner, SP, subproblemtype, λ)
-                        else
-                            break
-                        end
                     end
                 end
-                push!(Time_MP_inner, Time_MP_inner_iter)
-                normal_termination || break
-            end
 
-            # Print progress
-            print_progress(iter, LB, UB, time() - start_t, λ)
+                # Print progress
+                print_progress(iter_inner[end], LB_inner, UB_inner, time() - start_t, λ, true)
 
-            # Terminate or update master
-            if gap(UB, LB) > opt_tol
-                if MP_inner_opt == nothing
-                    computational_time = round(time() - start_t)
-                    return return_solution(problem, computational_time, LB, UB, Time_MP_inner, subproblemtype)
+                if record_discrete_second_stage_decision(problem, SP, discrete_decision_list)
+                    break
                 end
-                # if debug_repeated_scenarios(scenario_list, masterproblemtype, problem, MP_inner_opt, LB, UB, false)
-                #     return string(subproblemtype), problem.T, problem.budget, time() - start_t, 100*(UB-LB)/UB, sum([Time_MP_inner[i][t] for i in 1:length(Time_MP_inner) for t in 1:length(Time_MP_inner[i])]), compute_time_worstcase(Time_MP_inner), LB
-                # end
-                update_master_mixed_integer(problem, MP_outer, MP_inner_opt, masterproblemtype)
-            else
-                break
+
+                # Terminate or update master
+                if gap(UB_inner, LB_inner) > opt_tol
+                    update_master_inner_level(problem, MP_outer, MP_inner, SP, subproblemtype, λ)
+                else
+                    break
+                end
             end
         end
+        push!(Time_MP_inner, Time_MP_inner_iter)
+        
+        normal_termination || break
+        UB = min(UB, UB_inner)
+
+        # Print progress
+        print_progress(iter, LB, UB, time() - start_t, λ)
+
+        if record_scenario(problem, ξ, scenario_list)
+            break
+        end
+
+        # Terminate or update master
+        if gap(UB, LB) > opt_tol
+            update_master_mixed_integer(problem, MP_outer, ξ, masterproblemtype)
+        else
+            break
+        end
     end
-    # return Time_MP_inner
-    # println(UB, LB)
+
     computational_time = round(time() - start_t)
     return return_solution(problem, computational_time, LB, UB, Time_MP_inner, subproblemtype)
-
-    nb_worst_case = sum([1 for i in 1:length(Time_MP_inner) for t in 1:length(Time_MP_inner[i])]; init = 0)
-    # return string(subproblemtype), problem.T, problem.budget, time() - start_t, 100*(UB-LB)/UB, sum([Time_MP_inner[i][t] for i in 1:length(Time_MP_inner) for t in 1:length(Time_MP_inner[i])]; init = 0), compute_time_worstcase(Time_MP_inner), LB, nb_worst_case
-    # return iter, LB, UB, time() - start_t, iter_inner
 end
