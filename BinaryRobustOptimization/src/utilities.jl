@@ -45,7 +45,7 @@ function initializeJuMPModel()
             "OutputFlag" => 0,
             "MIPGap" => 0.001,
             "Threads" => THREADLIM,
-            "Presolve" => 1, #Presolve deactivated : 0
+            "Presolve" => 1, #Presolve deactivated : 0, 1 otherwise
         ))
         JuMP.set_silent(m)
         # JuMP.unset_silent(m)

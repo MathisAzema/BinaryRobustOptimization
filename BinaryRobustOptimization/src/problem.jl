@@ -3,7 +3,7 @@
     SubproblemType
 
 Enum representing the subproblem type. Possible values are `LinearizedKKT`,
-`IndicatorKKT`, `LinearizedDual`, `IndicatorDual` and `LagrangianDual`.
+`IndicatorKKT`, `LinearizedDual`, `IndicatorDual` and `CCGM`.
 """
 @enum(
     SubproblemType,
@@ -11,8 +11,9 @@ Enum representing the subproblem type. Possible values are `LinearizedKKT`,
     IndicatorKKT,
     LinearizedDual,
     IndicatorDual,
-    LagrangianDual,
-    LagrangianDualbis,
+    CCGM,
+    CCGL,
+    CCGLDC,
     Enumeration
 )
 """
@@ -212,7 +213,7 @@ In the third version, the model must be built using the
 first-stage decisions in the solved outer-level master model `MP_outer`,
 the discrete second-stage decisions stored in the `discrete_decision_list`
 dictionary, and the `master_inner` type of the inner-level master model.
-The Lagrangian coefficient `λ` must be `Float64` if `master_inner == LagrangianDual`.
+The Lagrangian coefficient `λ` must be `Float64` if `master_inner == CCGM`.
 """
 function init_master_inner_level end
 
@@ -223,7 +224,7 @@ Update the inner-level master model `MP_inner` based on the optimal values
 of the outer-level master model `MP_outer`, the subproblem model `SP`, and
 the `master_inner` type of the inner-level master model.
 
-The Lagrangian coefficient `λ` must be `Float64` if `master_inner == LagrangianDual`.
+The Lagrangian coefficient `λ` must be `Float64` if `master_inner == CCGM`.
 
 Must be implemented if `mixed_integer_recourse(problem) = true`.
 """

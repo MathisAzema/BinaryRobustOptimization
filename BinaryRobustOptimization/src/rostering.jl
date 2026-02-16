@@ -200,6 +200,8 @@ function update_master_mixed_integer(R::Rostering, MP_outer::JuMP.Model, ξ::Vec
 end
 
 function init_master_inner_level(R::Rostering, master_inner::SubproblemType)
+    R.β = Vector{VariableRef}[]
+    R.γ = Vector{VariableRef}[]
     m = initializeJuMPModel()
 
     @variable(m, ξ[1:R.T], Bin)
@@ -588,7 +590,7 @@ function record_scenario(R::Rostering, ξ::Vector{Int64}, scenario_list::Dict)
     return in_list
 end
 
-function solve_MP_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vector{Float64}, scenario_list::Dict)
+function solve_MP_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
     println("FW inner level solving...")
     println([t for t in 1:R.T if previous_scenario[t] > 1e-6])
     ξ_k = ones(R.T)
@@ -599,36 +601,30 @@ function solve_MP_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vect
         k += 1
         JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
         optimize!(MP_inner)
-        println(JuMP.objective_value(MP_inner))
-        # μval2 = JuMP.value.(MP_inner[:μ])
-        # if length(R.β) >= 1
-        #     μval = [minimum([value(R.γ[i][t]) + R.DemandDev[t]*value(R.β[i][t]) for i in 1:length(R.β)]) for t in 1:R.T]
-        # else
-        #     μval = JuMP.value.(MP_inner[:μ])
-        # end
-        # g_k1 = zeros(R.T)
-        # budget_indices = partialsort(1:R.T, 1:min(R.budget, R.T), by=i->-μval[i])
-        # g_k1[budget_indices] .= 1
-        ξ_k1 = determine_gradient_FW(R, MP_inner, scenario_list)
+        ξ_k1 = determine_gradient_FW(R, MP_inner, previous_scenario)
         JuMP.unfix.(MP_inner[:ξ])
         println(sum(abs.(ξ_k1 .- ξ_k)))
     end
+    JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
+    optimize!(MP_inner)
     println("FW inner level finished.")
+    return JuMP.objective_value(MP_inner)
 end
 
-function determine_gradient_FW(R::Rostering, MP_inner::JuMP.Model, scenario_list::Dict)
-    # println(scenario_list)
+function determine_gradient_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
+    println("previous ",[t for t in 1:R.T if previous_scenario[t] > 1e-6])
     m = initializeJuMPModel()
     @variable(m, ξ[1:R.T]>=0)
     @constraint(m, sum(ξ[t] for t in 1:R.T) <= R.budget)
     @constraint(m, [t in 1:R.T], ξ[t] <= 1)
-    @constraint(m, [key in keys(scenario_list)], sum(ξ[t] for t in key) <= R.budget - 1)
+    @constraint(m, sum(ξ[t] * previous_scenario[t] for t in 1:R.T) <= R.budget - 1)
     μval2 = JuMP.value.(MP_inner[:μ])
     if length(R.β) >= 1
         μval = [minimum([value(R.γ[i][t]) + R.DemandDev[t]*value(R.β[i][t]) for i in 1:length(R.β)]) for t in 1:R.T]
     else
         μval = JuMP.value.(MP_inner[:μ])
     end
+    println(round.(μval))
     @objective(m, Max, sum(μval[t]*ξ[t] for t in 1:R.T))
     optimize!(m)
     println([t for t in 1:R.T if JuMP.value(m[:ξ][t]) > 1e-6])

@@ -24,7 +24,7 @@ struct Line
     B12::Float64 
 end
 
-struct UnitCommitment <: AbstractProblem
+mutable struct UnitCommitment <: AbstractProblem
     name::String
     T::Int64
     Nslow::Int64
@@ -38,6 +38,8 @@ struct UnitCommitment <: AbstractProblem
     DemandDev::Vector{Vector{Float64}}
     PenaltyCost::Float64
     budget::Int64
+    ν::Vector{Matrix{VariableRef}}
+    σ::Vector{Vector{VariableRef}}
 
     function UnitCommitment(folder::String, budget::Int, N1::Int)
         """
@@ -114,7 +116,9 @@ struct UnitCommitment <: AbstractProblem
             BusWind, 
             DemandDev, 
             PenaltyCost,
-            budget)
+            budget,
+            Matrix{JuMP.VariableRef}[],
+            Vector{JuMP.VariableRef}[])
     end
 end
 
@@ -318,6 +322,8 @@ function update_master_mixed_integer(UC::UnitCommitment, MP_outer::JuMP.Model, �
 end
 
 function init_master_inner_level(UC::UnitCommitment, master_inner::SubproblemType)
+    UC.ν = Matrix{JuMP.VariableRef}[]
+    UC.σ = Vector{JuMP.VariableRef}[]
     m = initializeJuMPModel()
     # uncertainty set
     @variable(m, ξ[1:UC.T], Bin)
@@ -329,7 +335,7 @@ function init_master_inner_level(UC::UnitCommitment, master_inner::SubproblemTyp
 
     @objective(m, Max, s)
 
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL, CCGLDC]
         @variable(m, α[1:UC.T])
         @variable(m, δ[1:UC.T])
 
@@ -383,6 +389,7 @@ function update_master_inner_level(UC::UnitCommitment, MP_inner::JuMP.Model, pow
     # dual variables (common to all)
 
     ν = @variable(MP_inner, [t in 1:UC.T, b in 1:UC.Buses])
+    push!(UC.ν, ν)
 
     γmax = @variable(MP_inner, [l in 1:length(UC.Lines), t in 1:UC.T], lower_bound = 0)
     γmin = @variable(MP_inner, [l in 1:length(UC.Lines), t in 1:UC.T], lower_bound = 0)
@@ -419,18 +426,19 @@ function update_master_inner_level(UC::UnitCommitment, MP_inner::JuMP.Model, pow
                     - sum(power_slow[unit.name, t]*ν[t, unit.Bus] for unit in UC.slowunits, t in 1:UC.T)
                     )
 
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL, CCGLDC]
         α = MP_inner[:α]
         δ = MP_inner[:δ]
         
         σ = @variable(MP_inner, [1:UC.T], lower_bound = 0)
+        push!(UC.σ, σ)
 
         @constraint(MP_inner, [t in 1:UC.T], α[t] <= sum(UC.DemandDev[b][t]*ν[t, b] for b in 1:UC.Buses) + σ[t])
 
         @constraint(MP_inner, s <= hexpr + sum(δ[t] for t in 1:UC.T) - sum(σ[t] for t in 1:UC.T))
     end
 
-    if master_inner ∈ [LagrangianDual]
+    if master_inner ∈ [CCGM]
 
         # σ = @variable(MP_inner, [1:UC.T], lower_bound = 0)
 
@@ -534,11 +542,11 @@ function build_second_stage_problem(UC::UnitCommitment, MP_outer::JuMP.Model, MP
     @constraint(m, [t in 1:UC.T], u[t] <= 1)
     @constraint(m, [t in 1:UC.T, b in 1:UC.Buses], sum(power_slow[unit.name, t] for unit in UC.slowunits if unit.Bus==b) + sum(power_fast[unit.name, t] for unit in UC.fastunits if unit.Bus==b) + power_shedding[b,t]- power_curtailement[b,t] + sum(flow[line.id, t] for line in UC.Lines if line.b2==b) - sum(flow[line.id, t] for line in UC.Lines if line.b1==b) == UC.Demandbus[b][t]+ UC.DemandDev[b][t]*u[t])
 
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL, CCGLDC]
         α = JuMP.value.(MP_inner[:α])
         @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast + sum(α[t]*(ξ[t]-u[t]) for t in 1:UC.T))
     end
-    if master_inner ∈ [LagrangianDual]
+    if master_inner ∈ [CCGM]
         @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:UC.T))
     end
     return m
@@ -612,6 +620,53 @@ function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP
     end
     optimize!(MP_inner)
     return obj_max
+end
+
+function solve_MP_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
+    println("FW inner level solving...")
+    # println([t for t in 1:UC.T if previous_scenario[t] > 1e-6])
+    ξ_k = ones(UC.T)
+    # ξ_k1 = previous_scenario
+    ξ_k1 = zeros(UC.T)
+    k = 0
+    while 0 <= k <= 50 && sum(abs.(ξ_k1 .- ξ_k)) >= 1
+        ξ_k = copy(ξ_k1)
+        k += 1
+        JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
+        optimize!(MP_inner)
+        ξ_k1 = determine_gradient_FW(UC, MP_inner, previous_scenario)
+        JuMP.unfix.(MP_inner[:ξ])
+        println(sum(abs.(ξ_k1 .- ξ_k)))
+    end
+    JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
+    optimize!(MP_inner)
+    println("FW inner level finished.")
+    return JuMP.objective_value(MP_inner)
+end
+
+function determine_gradient_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
+    println("previous ", [t for t in 1:UC.T if previous_scenario[t] > 1e-6])
+    m = initializeJuMPModel()
+    @variable(m, ξ[1:UC.T]>=0)
+    @constraint(m, sum(ξ[t] for t in 1:UC.T) <= UC.budget)
+    @constraint(m, [t in 1:UC.T], ξ[t] <= 1)
+    @constraint(m, sum(ξ[t] * previous_scenario[t] for t in 1:UC.T) <= UC.budget - 1)
+    αval2 = JuMP.value.(MP_inner[:α])
+
+    println("length ", length(UC.ν))
+    if length(UC.ν) >= 1
+        println(value.(UC.ν[1]))
+        println(value(UC.σ[1][1]))
+        println(sum(UC.DemandDev[b][1]*value(UC.ν[1][1,b]) for b in 1:UC.Buses))
+        αval = [minimum([value(UC.σ[i][t]) + sum(UC.DemandDev[b][t]*value(UC.ν[i][t,b]) for b in 1:UC.Buses) for i in 1:length(UC.ν)]) for t in 1:UC.T]
+    else
+        αval = αval2
+    end
+    println(round.(αval))
+    @objective(m, Max, sum(αval[t]*ξ[t] for t in 1:UC.T))
+    optimize!(m)
+    println([t for t in 1:UC.T if JuMP.value(m[:ξ][t]) > 1e-6])
+    return JuMP.value.(m[:ξ])
 end
 
 function return_solution(UC::UnitCommitment, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)

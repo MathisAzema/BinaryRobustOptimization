@@ -6,8 +6,8 @@
 @everywhere import Pkg
 @everywhere Pkg.activate(".")
 @everywhere include("package.jl")
-# run_rostering(10, [1], [1], [LagrangianDual], 30.0)
-# run_rostering(10, [1,2], [3,6,9], [LagrangianDual, LagrangianDualbis], 3600.0)
+# run_rostering(10, [1], [1], [CCGM], 30.0)
+# run_rostering(10, [1,2], [3,6,9], [CCGM, CCGL], 3600.0)
 
 
 function run_rostering(N::Int, scale_list::Vector{Int}, budget_list::Vector{Int}, method_list, end_time)
@@ -18,7 +18,7 @@ function run_rostering(N::Int, scale_list::Vector{Int}, budget_list::Vector{Int}
                 for method in method_list
                     problem = Rostering(budget, scale, scale, i)
                     println("Instance ", i, " Scale ", scale, " Budget ", budget, " Method ", method)
-                    push!(futures_results, @spawn RobustOptLagrangianDual.run_ccg(problem, method, end_time))
+                    push!(futures_results, @spawn RobustOptCCGM.run_ccg(problem, method, end_time))
                 end
             end
         end

@@ -19,7 +19,7 @@ function run_ccg(
             @error("to do - CCG algorithm for mixed-integer instances without complete recourse")
             return nothing
         end
-        if subproblemtype == LagrangianDual && indicator_uncertainty(problem)
+        if subproblemtype == CCGM && indicator_uncertainty(problem)
             @error("to do - CCG algorithm for mixed-integer instances with indicator uncertainties")
             return nothing
         end
@@ -36,7 +36,7 @@ function run_ccg_mixed_integer_recourse(
     feas_tol::Float64,
 )
     @assert complete_recourse(problem)
-    @assert subproblemtype != LagrangianDual || !indicator_uncertainty(problem)
+    @assert subproblemtype != CCGM || !indicator_uncertainty(problem)
 
     masterproblemtype = CCG
     LB = -Inf
@@ -48,10 +48,8 @@ function run_ccg_mixed_integer_recourse(
 
     MP_outer = init_master(problem)
 
-    ξ = [0 for t in 1:problem.T]
-
     λ = nothing
-    if subproblemtype == LagrangianDual
+    if subproblemtype == CCGM
         λ = 1.0
     end
 
@@ -70,10 +68,11 @@ function run_ccg_mixed_integer_recourse(
 
         LB_inner = -Inf
         UB_inner = +Inf
+        ξ = [0 for t in 1:problem.T]
         MP_inner = init_master_inner_level(problem, subproblemtype)
         discrete_decision_list = Dict()
 
-        if subproblemtype == LagrangianDual
+        if subproblemtype == CCGM
             λ = max(λ, compute_lagrangian_coefficient(problem, MP_outer))
         end
 
@@ -91,16 +90,39 @@ function run_ccg_mixed_integer_recourse(
             end
         else
             while time() - start_t <= time_limit
-                iter_inner[end] += 1
-                start = time()
-                ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
-                push!(Time_MP_inner_iter, time()-start)
+                ub = -Inf
+                DCheuristic = false
+                if subproblemtype == CCGLDC
+                    ub_fw = solve_MP_FW(problem, MP_inner, ξ)
+                    println((ub_fw, LB_inner, UB_inner))
+                    if ub_fw <= 1.001* LB_inner
+                        println("HHH")
+                        JuMP.unfix.(MP_inner[:ξ])
+                        start = time()
+                        ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
+                        push!(Time_MP_inner_iter, time()-start)
 
-                if isnan(ub) # non-normal termination
-                    normal_termination = false
-                    break
+                        if isnan(ub) # non-normal termination
+                            normal_termination = false
+                            break
+                        end
+                        UB_inner = min(UB_inner, ub)
+                    else
+                        DCheuristic = true
+                        ub = ub_fw
+                    end
+                else
+                    start = time()
+                    ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
+                    push!(Time_MP_inner_iter, time()-start)
+
+                    if isnan(ub) # non-normal termination
+                        normal_termination = false
+                        break
+                    end
+                    UB_inner = min(UB_inner, ub)
                 end
-                UB_inner = min(UB_inner, ub)
+                iter_inner[end] += 1
 
                 SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
                 lb = solve_SP(problem, SP, time_limit - (time() - start_t))
@@ -113,11 +135,11 @@ function run_ccg_mixed_integer_recourse(
                 if lb > LB_inner
                     LB_inner = lb
                     for t in 1:problem.T
-                        ξ[t] = Float64.(Int.(value(MP_inner[:ξ][t])))
+                        ξ[t] = Float64.(Int.(round(value(MP_inner[:ξ][t]))))
                     end
                 end
 
-                if subproblemtype == LagrangianDual
+                if subproblemtype == CCGM
                     while true
                         step = compute_grad_lagrangian(problem, SP, MP_inner)
                         if step <= feas_tol
@@ -133,7 +155,34 @@ function run_ccg_mixed_integer_recourse(
                 print_progress(iter_inner[end], LB_inner, UB_inner, time() - start_t, λ, true)
 
                 if record_discrete_second_stage_decision(problem, SP, discrete_decision_list)
-                    break
+                    if DCheuristic
+                        JuMP.unfix.(MP_inner[:ξ])
+                        start = time()
+                        ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
+                        push!(Time_MP_inner_iter, time()-start)
+
+                        if isnan(ub) # non-normal termination
+                            normal_termination = false
+                            break
+                        end
+                        UB_inner = min(UB_inner, ub)
+
+                        SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
+                        lb = solve_SP(problem, SP, time_limit - (time() - start_t))
+
+                        if !isfinite(lb) # non-normal termination
+                            normal_termination = false
+                            break
+                        end
+                        if lb > LB_inner
+                            LB_inner = lb
+                            for t in 1:problem.T
+                                ξ[t] = Float64.(Int.(round(value(MP_inner[:ξ][t]))))
+                            end
+                        end
+                    else
+                        break
+                    end
                 end
 
                 # Terminate or update master

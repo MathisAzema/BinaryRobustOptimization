@@ -91,7 +91,7 @@ include("algorithms.jl")
 
 export run_ccg, run_benders, solve_deterministic_problem, test2
 export Rostering, UnitCommitment
-export SubproblemType, LinearizedKKT, IndicatorKKT, LinearizedDual, IndicatorDual, LagrangianDual, LagrangianDualbis, Enumeration
+export SubproblemType, LinearizedKKT, IndicatorKKT, LinearizedDual, IndicatorDual, CCGM, CCGL, CCGLDC, Enumeration
 export MasterType, CCG, Benders
 export set_num_threads, set_solver_SCIP, set_solver_CPLEX, set_solver_Gurobi, set_solver_Mosek
 
