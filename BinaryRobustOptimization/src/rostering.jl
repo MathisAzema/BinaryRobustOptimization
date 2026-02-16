@@ -657,8 +657,8 @@ function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner
     return obj_max
 end
 
-function return_solution(R::Rostering, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
-    name_csv = "$(R.name)_$(subproblemtype)_"*string(Int(computational_time))
+function return_solution(R::Rostering, computational_time::Float64, timelimit::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
+    name_csv = "$(R.name)_$(subproblemtype)_"*string(Int(timelimit))
     # write results to CSV (long format: one datum per line)
     try
         df = DataFrame(
@@ -681,7 +681,7 @@ function return_solution(R::Rostering, computational_time::Float64, LB::Float64,
                 push!(df, ("Time_per_iteration", string(round(val, digits=2)), iter_idx, pos_idx))
             end
         end
-        filepath = joinpath(pwd(), "results", name_csv*".csv")
+        filepath = joinpath(pwd(), "results/Rostering", name_csv*".csv")
         CSV.write(filepath, df)
     catch e
         @warn("Failed to write results CSV", error = e)

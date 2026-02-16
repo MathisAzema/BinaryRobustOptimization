@@ -1,93 +1,56 @@
-# using Revise; using Distributed
-# t = @async addprocs(2)
-# Distributed.nworkers()
-# include("run_cuts.jl")
+# run_unit_commitment_parallel([1,2], [1, 2, 3], [CCGL, CCGM], 10.0)
+# run_rostering_parallel(1:10, [1], [1, 2], [CCGL, CCGM], 10.0)
 
-@everywhere import Pkg
-@everywhere Pkg.activate(".")
-@everywhere include("package.jl")
-# run_rostering(10, [1], [1], [CCGM], 30.0)
-# run_rostering(10, [1,2], [3,6,9], [CCGM, CCGL], 3600.0)
+import Pkg
+Pkg.activate(".")
 
+using Distributed
 
-function run_rostering(N::Int, scale_list::Vector{Int}, budget_list::Vector{Int}, method_list, end_time)
-    futures_results = Vector{Future}()
-    for i in 1:N
-        for scale in scale_list
-            for budget in budget_list
-                for method in method_list
-                    problem = Rostering(budget, scale, scale, i)
-                    println("Instance ", i, " Scale ", scale, " Budget ", budget, " Method ", method)
-                    push!(futures_results, @spawn RobustOptCCGM.run_ccg(problem, method, end_time))
-                end
-            end
-        end
-    end
-    results = map(fetch, futures_results)
-    println("Writing excel files")
-    XLSX.openxlsx("Rostering.xlsx", mode="w") do xf
-        sheet = xf[1]
-        XLSX.rename!(sheet, "results")
-        sheet["A1"]="method"
-        sheet["B1"]="objective"
-        sheet["C1"]="scale"
-        sheet["D1"]="budget"
-        sheet["E1"]="Time"
-        sheet["F1"]="gap"
-        sheet["G1"]="Time tot worstcase"
-        sheet["H1"]="Time per iteration"
-        for i in 1:length(results)
-            if results[i]!=nothing
-                sheet["A"*string(i+1)]= results[i][1]
-                sheet["B"*string(i+1)]= results[i][8]
-                sheet["C"*string(i+1)]= results[i][2]
-                sheet["D"*string(i+1)]= results[i][3]
-                sheet["E"*string(i+1)]= results[i][4]
-                sheet["F"*string(i+1)]= results[i][5]
-                sheet["G"*string(i+1)]= results[i][6]
-                sheet["H"*string(i+1)]= string(round.(results[i][7], digits=2))
-            end
-        end
-    end
+Nbworkers = 10
+if nworkers() >= Nbworkers+1
+    rmprocs(workers())
+    addprocs(Nbworkers)
+else
+    addprocs(Nbworkers - nworkers())
 end
 
-function run_unit_commitment(budget_list::Vector{Int}, method_list, end_time)
-    futures_results = Vector{Future}()
-    for budget in budget_list
-        for method in method_list
-            # problem1 = UnitCommitment("6bus_JEAS", budget, 1)
-            # push!(futures_results, @spawn BinaryRobustOptimization.run_ccg(problem1, method, end_time))
-            problem2 = UnitCommitment("medium", budget, 5)
-            push!(futures_results, @spawn BinaryRobustOptimization.run_ccg(problem2, method, end_time))
-            # problem3 = UnitCommitment("118_syst_JEAS", budget, 35)
-            # push!(futures_results, @spawn BinaryRobustOptimization.run_ccg(problem3, method, end_time))
-        end
+# Ensure package availability on workers
+@everywhere using BinaryRobustOptimization
+@everywhere set_solver_Gurobi()
+@everywhere set_num_threads(1)
+
+@everywhere function unit_commitment_job(budget, size, method, end_time)
+    if size == 1
+        problem = UnitCommitment("6bus_JEAS", budget, 1)
+    elseif size == 2
+        problem = UnitCommitment("medium", budget, 5)
+    elseif size == 3
+        problem = UnitCommitment("118_syst_JEAS", budget, 35)
+    else
+        error("Unknown size value: $(size)")
     end
-    results = map(fetch, futures_results)
-    println("Writing excel files")
-    N = budget_list[end]
-    XLSX.openxlsx("UnitCommitment_$N.xlsx", mode="w") do xf
-        sheet = xf[1]
-        XLSX.rename!(sheet, "results")
-        sheet["A1"]="method"
-        sheet["B1"]="objective"
-        sheet["C1"]="scale"
-        sheet["D1"]="budget"
-        sheet["E1"]="Time"
-        sheet["F1"]="gap"
-        sheet["G1"]="Time tot worstcase"
-        sheet["H1"]="Time per iteration"
-        for i in 1:length(results)
-            if results[i]!=nothing
-                sheet["A"*string(i+1)]= results[i][1]
-                sheet["B"*string(i+1)]= results[i][8]
-                sheet["C"*string(i+1)]= results[i][2]
-                sheet["D"*string(i+1)]= results[i][3]
-                sheet["E"*string(i+1)]= results[i][4]
-                sheet["F"*string(i+1)]= results[i][5]
-                sheet["G"*string(i+1)]= results[i][6]
-                sheet["H"*string(i+1)]= string(round.(results[i][7], digits=2))
-            end
-        end
+    run_ccg(problem, method, end_time)
+end
+
+function run_unit_commitment_parallel(budget_list::Vector{Int}, size_list, method_list, end_time)
+    combos = [(b, s, m) for b in budget_list for s in size_list for m in method_list]
+
+    results = pmap(combos) do (b, s, m)
+        unit_commitment_job(b, s, m, end_time)
     end
+    return 
+end
+
+@everywhere function rostering_job(seed::Int, scale, budget, method, end_time)
+    problem = Rostering(budget, scale, scale, seed)
+    run_ccg(problem, method, end_time)
+end
+
+function run_rostering_parallel(seed_list, budget_list, scale_list, method_list, end_time)
+    combos = [(seed, b, s, m) for seed in seed_list for b in budget_list for s in scale_list for m in method_list]
+
+    results = pmap(combos) do (seed, b, s, m)
+        rostering_job(seed, s, b, m, end_time)
+    end
+    return 
 end

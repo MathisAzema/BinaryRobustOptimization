@@ -152,7 +152,7 @@ function run_ccg_mixed_integer_recourse(
                 end
 
                 # Print progress
-                print_progress(iter_inner[end], LB_inner, UB_inner, time() - start_t, λ, true)
+                # print_progress(iter_inner[end], LB_inner, UB_inner, time() - start_t, λ, true)
 
                 if record_discrete_second_stage_decision(problem, SP, discrete_decision_list)
                     if DCheuristic
@@ -199,7 +199,7 @@ function run_ccg_mixed_integer_recourse(
         UB = min(UB, UB_inner)
 
         # Print progress
-        print_progress(iter, LB, UB, time() - start_t, λ)
+        # print_progress(iter, LB, UB, time() - start_t, λ)
 
         if record_scenario(problem, ξ, scenario_list)
             break
@@ -213,6 +213,6 @@ function run_ccg_mixed_integer_recourse(
         end
     end
 
-    computational_time = round(time() - start_t)
-    return return_solution(problem, computational_time, LB, UB, Time_MP_inner, subproblemtype)
+    computational_time = round(time() - start_t, digits = 2)
+    return return_solution(problem, computational_time, time_limit, LB, UB, Time_MP_inner, subproblemtype)
 end

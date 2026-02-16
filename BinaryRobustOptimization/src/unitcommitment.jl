@@ -669,8 +669,8 @@ function determine_gradient_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previou
     return JuMP.value.(m[:ξ])
 end
 
-function return_solution(UC::UnitCommitment, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
-    name_csv = "$(UC.name)_$(subproblemtype)_"*string(Int(computational_time))
+function return_solution(UC::UnitCommitment, computational_time::Float64, timelimit::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
+    name_csv = "$(UC.name)_$(subproblemtype)_"*string(UC.budget)*"_"*string(Int(timelimit))
     # write results to CSV (long format: one datum per line)
     try
         df = DataFrame(
@@ -693,7 +693,7 @@ function return_solution(UC::UnitCommitment, computational_time::Float64, LB::Fl
                 push!(df, ("Time_per_iteration", string(round(val, digits=2)), iter_idx, pos_idx))
             end
         end
-        filepath = joinpath(pwd(), "results", name_csv*".csv")
+        filepath = joinpath(pwd(), "results/UC", name_csv*".csv")
         CSV.write(filepath, df)
     catch e
         @warn("Failed to write results CSV", error = e)
