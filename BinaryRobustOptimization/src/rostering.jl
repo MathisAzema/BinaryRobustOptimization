@@ -216,7 +216,7 @@ function init_master_inner_level(R::Rostering, master_inner::SubproblemType)
     )
     @objective(m, Max, s)
 
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL]
         @variable(m, μ[1:R.T]>=0)
         @variable(m, δ[1:R.T]>=0)
         @constraint(m, [t in 1:R.T], δ[t] <= R.DemandDev[t]*R.PenaltyCost[t]*ξ[t])
@@ -268,7 +268,7 @@ end
 
 function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, master_inner::SubproblemType, λ = nothing)
 
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL]
         μ = MP_inner[:μ]
         δ = MP_inner[:δ]
         # println(JuMP.value.(μ))
@@ -404,7 +404,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         end
     end
 
-    if master_inner ∈ [LagrangianDual]
+    if master_inner ∈ [CCGM]
         #= default (unscaled)
         γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
         @constraint(MP_inner,
@@ -439,7 +439,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         ##=#
     end
 
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL]
         μ = MP_inner[:μ]
         δ = MP_inner[:δ]
         # σ = @variable(MP_inner, lower_bound = 0)
@@ -536,11 +536,11 @@ function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner
             +sum(R.PenaltyCost[t]*w[t] for t in 1:R.T)
     )
         
-    if master_inner ∈ [LagrangianDualbis]
+    if master_inner ∈ [CCGL]
         μ = JuMP.value.(MP_inner[:μ])
         @objective(m, Min, hexpr + sum(μ[t]*(ξ[t]-u[t]) for t in 1:R.T))
     end
-    if master_inner ∈ [LagrangianDual]
+    if master_inner ∈ [CCGM]
         @objective(m, Min, hexpr + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:R.T))
     end
 
@@ -659,5 +659,32 @@ end
 
 function return_solution(R::Rostering, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
     name_csv = "$(R.name)_$(subproblemtype)_"*string(Int(computational_time))
+    # write results to CSV (long format: one datum per line)
+    try
+        df = DataFrame(
+            metric = String[],
+            value = String[],
+            i = Vector{Union{Missing, Int}}(),
+            j = Vector{Union{Missing, Int}}(),
+        )
+        # scalars
+        push!(df, ("name", "$(R.name)_$(subproblemtype)", missing, missing))
+        push!(df, ("T", string(R.T), missing, missing))
+        push!(df, ("budget", string(R.budget), missing, missing))
+        push!(df, ("Time", string(computational_time), missing, missing))
+        push!(df, ("LB", string(LB), missing, missing))
+        push!(df, ("UB", string(UB), missing, missing))
+        push!(df, ("gap", string(gap(UB, LB)*100), missing, missing))
+        # arrays
+        for (iter_idx, vec) in enumerate(Time_MP_inner)
+            for (pos_idx, val) in enumerate(vec)
+                push!(df, ("Time_per_iteration", string(round(val, digits=2)), iter_idx, pos_idx))
+            end
+        end
+        filepath = joinpath(pwd(), "results", name_csv*".csv")
+        CSV.write(filepath, df)
+    catch e
+        @warn("Failed to write results CSV", error = e)
+    end
     return name_csv, R.T, R.budget, computational_time, round(LB, digits=2), round(gap(UB, LB), digits=2), Time_MP_inner
 end

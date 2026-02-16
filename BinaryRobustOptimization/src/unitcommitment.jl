@@ -671,5 +671,32 @@ end
 
 function return_solution(UC::UnitCommitment, computational_time::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
     name_csv = "$(UC.name)_$(subproblemtype)_"*string(Int(computational_time))
+    # write results to CSV (long format: one datum per line)
+    try
+        df = DataFrame(
+            metric = String[],
+            value = String[],
+            i = Vector{Union{Missing, Int}}(),
+            j = Vector{Union{Missing, Int}}(),
+        )
+        # scalars
+        push!(df, ("name", "$(UC.name)_$(subproblemtype)", missing, missing))
+        push!(df, ("T", string(UC.T), missing, missing))
+        push!(df, ("budget", string(UC.budget), missing, missing))
+        push!(df, ("Time", string(computational_time), missing, missing))
+        push!(df, ("LB", string(LB), missing, missing))
+        push!(df, ("UB", string(UB), missing, missing))
+        push!(df, ("gap", string(gap(UB, LB)*100), missing, missing))
+        # arrays
+        for (iter_idx, vec) in enumerate(Time_MP_inner)
+            for (pos_idx, val) in enumerate(vec)
+                push!(df, ("Time_per_iteration", string(round(val, digits=2)), iter_idx, pos_idx))
+            end
+        end
+        filepath = joinpath(pwd(), "results", name_csv*".csv")
+        CSV.write(filepath, df)
+    catch e
+        @warn("Failed to write results CSV", error = e)
+    end
     return name_csv, UC.T, UC.budget, computational_time, round(LB, digits=2), round(gap(UB, LB), digits=2), Time_MP_inner
 end
