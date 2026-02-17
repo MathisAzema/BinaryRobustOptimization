@@ -10,7 +10,7 @@ The job entry points are defined in [run.jl](run.jl): `unit_commitment_job()` an
 ## Parameters
 
 ### Unit Commitment (UC)
-- budget: typical values 1, 3, 5
+- budget: 1, 2, 3
 - size: 1 = small, 2 = medium, 3 = large
 - method: `CCGL` (ours) or `CCGM` (literature)
 - time_limit: in seconds
@@ -29,7 +29,7 @@ The number of workers is set in [run.jl](run.jl) via `Nbworkers = 10`. Adjust th
 Example:
 
 ### UC: 18 runs over budgets × sizes × methods with a 24h time limit
-run_unit_commitment_parallel([1,3,5], [1,2,3], [CCGL, CCGM], 24*3600.0)
+run_unit_commitment_parallel([1,2,3], [1,2,3], [CCGL, CCGM], 24*3600.0)
 
 ### Rostering: up to 1200 runs across seeds × budgets × scales × methods
 run_rostering_parallel(1:100, [3,6,9], [1,2], [CCGL, CCGM], 2*3600.0)
