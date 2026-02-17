@@ -24,6 +24,8 @@ The job entry points are defined in [run.jl](run.jl): `unit_commitment_job()` an
 
 ## Parallel Runs
 
+The number of workers is set in [run.jl](run.jl) via `Nbworkers = 10`. Adjust that value to change parallelism.
+
 Example:
 
 ### UC: 18 runs over budgets × sizes × methods with a 24h time limit
@@ -31,9 +33,7 @@ run_unit_commitment_parallel([1,3,5], [1,2,3], [CCGL, CCGM], 24*3600.0)
 
 ### Rostering: up to 1200 runs across seeds × budgets × scales × methods
 run_rostering_parallel(1:100, [3,6,9], [1,2], [CCGL, CCGM], 2*3600.0)
-```
 
-The number of workers is set in [run.jl](run.jl) via `Nbworkers = 10`. Adjust that value to change parallelism.
 
 ## Results
 
