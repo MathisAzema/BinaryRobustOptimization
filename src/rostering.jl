@@ -732,8 +732,18 @@ function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner
     return obj_max
 end
 
-function return_solution(R::Rostering, computational_time::Float64, timelimit::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
-    name_csv = "$(R.name)_$(subproblemtype)_$(R.budget)_$(Int(timelimit))"
+function return_solution(
+    R::Rostering,
+    computational_time::Float64,
+    timelimit::Float64,
+    LB::Float64,
+    UB::Float64,
+    Time_MP_inner::Vector{Vector{Float64}},
+    subproblemtype::SubproblemType;
+    inner_presolve::Bool=true,
+)
+    presolve_label = inner_presolve ? "presolve_on" : "presolve_off"
+    name_csv = "$(R.name)_$(subproblemtype)_$(R.budget)_$(presolve_label)_$(Int(timelimit))"
     # write results to CSV (long format: one datum per line)
     try
         df = DataFrame(
@@ -749,6 +759,7 @@ function return_solution(R::Rostering, computational_time::Float64, timelimit::F
         push!(df, ("J", string(R.J), missing, missing))
         push!(df, ("T", string(R.T), missing, missing))
         push!(df, ("budget", string(R.budget), missing, missing))
+        push!(df, ("inner_presolve", string(inner_presolve), missing, missing))
         push!(df, ("time_limit", string(timelimit), missing, missing))
         push!(df, ("Time", string(computational_time), missing, missing))
         push!(df, ("LB", string(LB), missing, missing))

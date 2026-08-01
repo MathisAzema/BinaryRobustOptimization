@@ -1,9 +1,13 @@
 """
-    run_ccg(problem::AbstractProblem, subproblemtype::SubproblemType, time_limit::Float64, opt_tol::Float64 = 1e-4, feas_tol::Float64 = 1e-5)
+    run_ccg(problem::AbstractProblem, subproblemtype::SubproblemType,
+            time_limit::Float64, opt_tol::Float64 = 1e-4,
+            feas_tol::Float64 = 1e-5; inner_presolve::Bool = true)
 
 Solve `problem` using the column-and-constraint generation algorithm using the
 `subproblemtype` subproblem with specified `time_limit` (in seconds) and
 optimality and feasibility tolerances of `opt_tol` and `feas_tol`, respectively.
+Set `inner_presolve=false` to disable Gurobi presolve only on each worst-case
+master problem `MP_inner`.
 
 Returns `(num_iter, lb, ub, total_time, iter_inner)`
 """
@@ -13,6 +17,8 @@ function run_ccg(
     time_limit::Float64,
     opt_tol::Float64=1e-3,
     feas_tol::Float64=1e-5,
+    ;
+    inner_presolve::Bool=true,
 )
     if mixed_integer_recourse(problem)
         if !complete_recourse(problem)
@@ -23,7 +29,14 @@ function run_ccg(
             @error("to do - CCG algorithm for mixed-integer instances with indicator uncertainties")
             return nothing
         end
-        return run_ccg_mixed_integer_recourse(problem, subproblemtype, time_limit, opt_tol, feas_tol)
+        return run_ccg_mixed_integer_recourse(
+            problem,
+            subproblemtype,
+            time_limit,
+            opt_tol,
+            feas_tol;
+            inner_presolve = inner_presolve,
+        )
     end
     return run_iterative_continuous_recourse(problem, CCG, subproblemtype, time_limit, opt_tol, feas_tol)
 end
@@ -34,6 +47,8 @@ function run_ccg_mixed_integer_recourse(
     time_limit::Float64,
     opt_tol::Float64,
     feas_tol::Float64,
+    ;
+    inner_presolve::Bool=true,
 )
     @assert complete_recourse(problem)
     @assert subproblemtype != PdDoublePrimeUL || !indicator_uncertainty(problem)
@@ -47,6 +62,7 @@ function run_ccg_mixed_integer_recourse(
     scenario_list = Dict()
 
     MP_outer = init_master(problem)
+    # JuMP.unset_silent(MP_outer)
 
     λ = nothing
     if subproblemtype == PdDoublePrimeUL
@@ -70,6 +86,7 @@ function run_ccg_mixed_integer_recourse(
         UB_inner = +Inf
         ξ = [0 for t in 1:problem.T]
         MP_inner = init_master_inner_level(problem, subproblemtype)
+        set_optimizer_presolve(MP_inner, inner_presolve)
 
         if subproblemtype == PdDoublePrimeUL
             λ = max(λ, compute_lagrangian_coefficient(problem, MP_outer))
@@ -164,5 +181,14 @@ function run_ccg_mixed_integer_recourse(
     end
 
     computational_time = round(time() - start_t, digits = 2)
-    return return_solution(problem, computational_time, time_limit, LB, UB, Time_MP_inner, subproblemtype)
+    return return_solution(
+        problem,
+        computational_time,
+        time_limit,
+        LB,
+        UB,
+        Time_MP_inner,
+        subproblemtype;
+        inner_presolve = inner_presolve,
+    )
 end

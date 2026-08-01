@@ -26,6 +26,8 @@ The job entry points are defined in [run.jl](run.jl): `unit_commitment_job()` an
   - `PdDoublePrimeM`: scalar dualization with a continuous auxiliary copy
   - `HatPdDoublePrimeM`: scalar dualization with a binary auxiliary copy
 - time_limit: in seconds (2 hours used in the literature, but more is allowed)
+- inner_presolve: `true` or `false`; changes Gurobi presolve only for the
+  worst-case master problems `MP_inner`
 
 The instance generator follows the staff-rostering experiment of Subramanyam
 (2022): ten instances of size `(12, 3, 21)`, ten scaled instances of size
@@ -60,8 +62,12 @@ small smoke benchmark over one seed, one size, and one budget:
 ```bash
 ROSTERING_SEEDS=1 ROSTERING_SCALES=1 ROSTERING_BUDGETS=3 \
 ROSTERING_TIME_LIMIT=60 ROSTERING_WORKERS=1 ROSTERING_THREADS=1 \
+ROSTERING_INNER_PRESOLVE=false \
 julia --project=. experiments/rostering_five_approaches.jl
 ```
+
+`ROSTERING_INNER_PRESOLVE` defaults to `true`. At API level, the equivalent
+setting is `run_ccg(problem, method, time_limit; inner_presolve=false)`.
 
 For parallel runs, avoid CPU oversubscription. For example, use ten workers and
 one Gurobi thread per run:
@@ -73,7 +79,9 @@ julia --project=. experiments/rostering_five_approaches.jl
 
 Each run writes its detailed metrics to `results/Rostering/`. The experiment
 script additionally writes a timestamped `five_approaches_summary_*.csv` with
-the solution time, gap, outer iterations, and total inner iterations.
+the presolve setting, solution time, gap, outer iterations, and total inner
+iterations. Detailed result filenames also contain `presolve_on` or
+`presolve_off`, so the two variants do not overwrite one another.
 
 
 ## Results

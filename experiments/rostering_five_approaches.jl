@@ -15,9 +15,17 @@ function parse_integer_spec(specification::AbstractString)
     return parse.(Int, split(specification, ','))
 end
 
+function parse_boolean_spec(specification::AbstractString)
+    normalized = lowercase(strip(specification))
+    normalized in ("true", "1", "yes", "on") && return true
+    normalized in ("false", "0", "no", "off") && return false
+    error("Expected true/false for ROSTERING_INNER_PRESOLVE, got: $(specification)")
+end
+
 time_limit = parse(Float64, get(ENV, "ROSTERING_TIME_LIMIT", "7200"))
 requested_workers = parse(Int, get(ENV, "ROSTERING_WORKERS", "1"))
 threads_per_run = parse(Int, get(ENV, "ROSTERING_THREADS", "8"))
+inner_presolve = parse_boolean_spec(get(ENV, "ROSTERING_INNER_PRESOLVE", "true"))
 seeds = parse_integer_spec(get(ENV, "ROSTERING_SEEDS", "1:10"))
 budgets = parse_integer_spec(get(ENV, "ROSTERING_BUDGETS", "3,6,9"))
 scales = parse_integer_spec(get(ENV, "ROSTERING_SCALES", "1,2"))
@@ -48,11 +56,21 @@ configurations = [
     for method in methods
 ]
 
-@everywhere function run_rostering_configuration(config, time_limit, threads_per_run)
+@everywhere function run_rostering_configuration(
+    config,
+    time_limit,
+    threads_per_run,
+    inner_presolve,
+)
     set_num_threads(threads_per_run)
     try
         problem = Rostering(config.budget, config.scale, config.scale, config.seed)
-        raw_result = run_ccg(problem, config.method, time_limit)
+        raw_result = run_ccg(
+            problem,
+            config.method,
+            time_limit;
+            inner_presolve = inner_presolve,
+        )
         inner_times = raw_result[7]
         relative_gap = raw_result[6]
         solved = isfinite(relative_gap) && relative_gap <= 1e-3
@@ -71,6 +89,7 @@ configurations = [
             T = problem.T,
             budget = config.budget,
             method = string(config.method),
+            inner_presolve = inner_presolve,
             time_limit = time_limit,
             elapsed_time = raw_result[4],
             lower_bound = raw_result[5],
@@ -91,6 +110,7 @@ configurations = [
             T = 21 * config.scale,
             budget = config.budget,
             method = string(config.method),
+            inner_presolve = inner_presolve,
             time_limit = time_limit,
             elapsed_time = NaN,
             lower_bound = NaN,
@@ -108,11 +128,16 @@ end
 println(
     "Running $(length(configurations)) configurations with " *
     "$(requested_workers) worker(s), $(threads_per_run) Gurobi thread(s) per run, " *
-    "and a $(time_limit)-second time limit.",
+    "MP_inner presolve=$(inner_presolve), and a $(time_limit)-second time limit.",
 )
 
 results = pmap(configurations) do config
-    run_rostering_configuration(config, time_limit, threads_per_run)
+    run_rostering_configuration(
+        config,
+        time_limit,
+        threads_per_run,
+        inner_presolve,
+    )
 end
 
 summary = DataFrame(results)

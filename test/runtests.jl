@@ -113,3 +113,17 @@ end
     )
     @test formulation_values[PdM] ≈ formulation_values[PdPrimeM] atol = 1e-6
 end
+
+@testset "MP_inner presolve switch" begin
+    set_solver_Gurobi()
+    R = tiny_rostering_instance()
+    outer = BinaryRobustOptimization.init_master(R)
+    inner = BinaryRobustOptimization.init_master_inner_level(R, PdM)
+
+    BinaryRobustOptimization.set_optimizer_presolve(inner, false)
+    @test JuMP.get_optimizer_attribute(inner, "Presolve") == 0
+    @test JuMP.get_optimizer_attribute(outer, "Presolve") == 1
+
+    BinaryRobustOptimization.set_optimizer_presolve(inner, true)
+    @test JuMP.get_optimizer_attribute(inner, "Presolve") == 1
+end

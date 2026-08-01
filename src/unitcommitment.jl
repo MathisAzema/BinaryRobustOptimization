@@ -699,8 +699,18 @@ function determine_gradient_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previou
     return JuMP.value.(m[:ξ])
 end
 
-function return_solution(UC::UnitCommitment, computational_time::Float64, timelimit::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
-    name_csv = "$(UC.name)_$(subproblemtype)_"*string(UC.budget)*"_"*string(Int(timelimit))
+function return_solution(
+    UC::UnitCommitment,
+    computational_time::Float64,
+    timelimit::Float64,
+    LB::Float64,
+    UB::Float64,
+    Time_MP_inner::Vector{Vector{Float64}},
+    subproblemtype::SubproblemType;
+    inner_presolve::Bool=true,
+)
+    presolve_label = inner_presolve ? "presolve_on" : "presolve_off"
+    name_csv = "$(UC.name)_$(subproblemtype)_$(UC.budget)_$(presolve_label)_$(Int(timelimit))"
     # write results to CSV (long format: one datum per line)
     try
         df = DataFrame(
@@ -713,6 +723,7 @@ function return_solution(UC::UnitCommitment, computational_time::Float64, timeli
         push!(df, ("name", "$(UC.name)_$(subproblemtype)", missing, missing))
         push!(df, ("T", string(UC.T), missing, missing))
         push!(df, ("budget", string(UC.budget), missing, missing))
+        push!(df, ("inner_presolve", string(inner_presolve), missing, missing))
         push!(df, ("Time", string(computational_time), missing, missing))
         push!(df, ("LB", string(LB), missing, missing))
         push!(df, ("UB", string(UB), missing, missing))

@@ -30,6 +30,23 @@ function set_optimizer_time_limit(m::JuMP.Model, time_limit::Float64)
     end
 end
 
+"""
+    set_optimizer_presolve(m::JuMP.Model, enabled::Bool)
+
+Enable or disable presolve on a specific optimization model.  The experiment
+uses this helper only for the worst-case master `MP_inner`; the outer master and
+recourse subproblems keep the solver default configured in
+`initializeJuMPModel`.
+"""
+function set_optimizer_presolve(m::JuMP.Model, enabled::Bool)
+    if SOLVER == "Gurobi"
+        JuMP.set_optimizer_attribute(m, "Presolve", enabled ? 1 : 0)
+    elseif !enabled
+        error("Disabling presolve for MP_inner is currently supported only with Gurobi")
+    end
+    return m
+end
+
 function initializeJuMPModel()
     if SOLVER == "Mosek"
         return Model(optimizer_with_attributes(
@@ -45,7 +62,7 @@ function initializeJuMPModel()
             "OutputFlag" => 0,
             "MIPGap" => 0.00001,
             "Threads" => THREADLIM,
-            "Presolve" => 0, #Presolve deactivated : 0, 1 otherwise
+            "Presolve" => 1, #Presolve deactivated : 0, 1 otherwise
         ))
         JuMP.set_silent(m)
         # JuMP.unset_silent(m)
