@@ -12,6 +12,7 @@ Enum representing the subproblem type. Possible values are `LinearizedKKT`,
     LinearizedDual,
     IndicatorDual,
     CCGM,
+    CCGM2,
     CCGL,
     CCGLDC,
     Enumeration

@@ -86,12 +86,13 @@ end
 include("problem.jl")
 include("rostering.jl")
 include("unitcommitment.jl")
+include("unitcommitmentcontinuous.jl")
 include("utilities.jl")
 include("algorithms.jl")
 
 export run_ccg, run_benders, solve_deterministic_problem, test2
-export Rostering, UnitCommitment
-export SubproblemType, LinearizedKKT, IndicatorKKT, LinearizedDual, IndicatorDual, CCGM, CCGL, CCGLDC, Enumeration
+export Rostering, UnitCommitment, UnitCommitmentContinuous
+export SubproblemType, LinearizedKKT, IndicatorKKT, LinearizedDual, IndicatorDual, CCGM, CCGM2, CCGL, CCGLDC, Enumeration
 export MasterType, CCG, Benders
 export set_num_threads, set_solver_SCIP, set_solver_CPLEX, set_solver_Gurobi, set_solver_Mosek
 

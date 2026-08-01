@@ -339,6 +339,10 @@ function init_master_inner_level(UC::UnitCommitment, master_inner::SubproblemTyp
         @variable(m, α[1:UC.T])
         @variable(m, δ[1:UC.T])
 
+        println([sum(UC.DemandDev[b][t] for b in 1:UC.Buses) * UC.PenaltyCost for t in 1:UC.T])
+
+        # @constraint(m, [t in 1:UC.T], α[t] == sum(UC.DemandDev[b][t] for b in 1:UC.Buses) * UC.PenaltyCost * (2*ξ[t]-1))
+
         @constraint(m, [t in 1:UC.T], δ[t] <= sum(UC.DemandDev[b][t] for b in 1:UC.Buses) * UC.PenaltyCost * ξ[t])
         @constraint(m, [t in 1:UC.T], δ[t] <= α[t]+sum(UC.DemandDev[b][t] for b in 1:UC.Buses) * UC.PenaltyCost * (1 - ξ[t]))
 
@@ -452,10 +456,26 @@ function update_master_inner_level(UC::UnitCommitment, MP_inner::JuMP.Model, pow
         @constraint(MP_inner, [t in 1:UC.T], σ[t] <= ξ[t])
         @constraint(MP_inner, s <= hexpr + λ * sum(σ[t] for t in 1:UC.T))
     end
+    
+    if master_inner ∈ [CCGM2]
+
+        σ = @variable(MP_inner, [1:UC.T], lower_bound = 0)
+
+        @constraint(MP_inner, [t in 1:UC.T], - UC.PenaltyCost * sum(UC.DemandDev[b][t] for b in 1:UC.Buses)  * (1-2*ξ[t])<=sum(UC.DemandDev[b][t]*ν[t, b] for b in 1:UC.Buses) + σ[t] )
+        @constraint(MP_inner, s <=hexpr + sum(UC.DemandDev[b][t]*UC.PenaltyCost*ξ[t] for b in 1:UC.Buses for t in 1:UC.T) - sum(σ[t] for t in 1:UC.T))
+
+        #scale sigma
+        # σ = @variable(MP_inner, [1:UC.T])
+
+        # @constraint(MP_inner, [t in 1:UC.T], σ[t] <= sum(UC.DemandDev[b][t]*ν[t, b] for b in 1:UC.Buses)/λ + 1-ξ[t])
+        # @constraint(MP_inner, [t in 1:UC.T], σ[t] <= ξ[t])
+        # @constraint(MP_inner, s <= hexpr + λ * sum(σ[t] for t in 1:UC.T))
+    end
 end
 
 function compute_lagrangian_coefficient(UC::UnitCommitment, MP_outer::JuMP.Model)
-    return sum(sum(UC.DemandDev))*UC.PenaltyCost/15
+    # return sum(sum(UC.DemandDev))*UC.PenaltyCost/15
+    return 97020
 end
 
 function build_second_stage_problem(UC::UnitCommitment, MP_outer::JuMP.Model, MP_inner::JuMP.Model, master_inner::SubproblemType, λ = nothing)
@@ -549,6 +569,15 @@ function build_second_stage_problem(UC::UnitCommitment, MP_outer::JuMP.Model, MP
     if master_inner ∈ [CCGM]
         @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:UC.T))
     end
+    
+    if master_inner ∈ [CCGM2]
+        @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast + sum(UC.DemandDev[b][t]*UC.PenaltyCost*(ξ[t]+u[t]-2*ξ[t]*u[t]) for b in 1:UC.Buses for t in 1:UC.T))
+    end
+
+    if master_inner ∈ [Enumeration]
+        JuMP.fix.(u, ξ; force = true)
+        @objective(m, Min, thermal_cost + thermal_fixed_cost_slow + thermal_fixed_cost_fast)
+    end
     return m
 end
 
@@ -605,7 +634,7 @@ function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP
             fix(MP_inner[:ξ][t], scenario[t])
         end
         optimize!(MP_inner)
-        SP = build_second_stage_problem(UC, MP_outer, MP_inner)
+        SP = build_second_stage_problem(UC, MP_outer, MP_inner, Enumeration, nothing)
         lb = solve_SP(UC, SP, time_limit)
         if isnan(lb)
             return NaN
@@ -623,7 +652,7 @@ function solve_MP_inner_enumeration(UC::UnitCommitment, MP_outer::JuMP.Model, MP
 end
 
 function solve_MP_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
-    println("FW inner level solving...")
+    # println("FW inner level solving...")
     # println([t for t in 1:UC.T if previous_scenario[t] > 1e-6])
     ξ_k = ones(UC.T)
     # ξ_k1 = previous_scenario
@@ -640,32 +669,33 @@ function solve_MP_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previous_scenario
     end
     JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
     optimize!(MP_inner)
-    println("FW inner level finished.")
+    # println("FW inner level finished.")
+    println([t for t in 1:UC.T if ξ_k[t] > 1e-6])
     return JuMP.objective_value(MP_inner)
 end
 
 function determine_gradient_FW(UC::UnitCommitment, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
-    println("previous ", [t for t in 1:UC.T if previous_scenario[t] > 1e-6])
+    # println("previous ", [t for t in 1:UC.T if previous_scenario[t] > 1e-6])
     m = initializeJuMPModel()
     @variable(m, ξ[1:UC.T]>=0)
-    @constraint(m, sum(ξ[t] for t in 1:UC.T) <= UC.budget)
+    @constraint(m, sum(ξ[t] for t in 1:UC.T) == UC.budget)
     @constraint(m, [t in 1:UC.T], ξ[t] <= 1)
     @constraint(m, sum(ξ[t] * previous_scenario[t] for t in 1:UC.T) <= UC.budget - 1)
     αval2 = JuMP.value.(MP_inner[:α])
 
-    println("length ", length(UC.ν))
+    # println("length ", length(UC.ν))
     if length(UC.ν) >= 1
-        println(value.(UC.ν[1]))
-        println(value(UC.σ[1][1]))
-        println(sum(UC.DemandDev[b][1]*value(UC.ν[1][1,b]) for b in 1:UC.Buses))
+        # println(value.(UC.ν[1]))
+        # println(value(UC.σ[1][1]))
+        # println(sum(UC.DemandDev[b][1]*value(UC.ν[1][1,b]) for b in 1:UC.Buses))
         αval = [minimum([value(UC.σ[i][t]) + sum(UC.DemandDev[b][t]*value(UC.ν[i][t,b]) for b in 1:UC.Buses) for i in 1:length(UC.ν)]) for t in 1:UC.T]
     else
         αval = αval2
     end
-    println(round.(αval))
+    # println(round.(αval))
     @objective(m, Max, sum(αval[t]*ξ[t] for t in 1:UC.T))
     optimize!(m)
-    println([t for t in 1:UC.T if JuMP.value(m[:ξ][t]) > 1e-6])
+    # println([t for t in 1:UC.T if JuMP.value(m[:ξ][t]) > 1e-6])
     return JuMP.value.(m[:ξ])
 end
 

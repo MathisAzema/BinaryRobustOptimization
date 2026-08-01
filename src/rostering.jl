@@ -405,21 +405,21 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
     end
 
     if master_inner ∈ [CCGM]
-        #= default (unscaled)
-        γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
-        @constraint(MP_inner,
-            s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-                +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-                -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
-                +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
-                -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
-                -sum(γ[t] for t in 1:R.T)
-                +sum(λ*g[t] for t in 1:R.T)
-        )
-        @constraint(MP_inner, [t in 1:R.T],
-            -γ[t] - (R.DemandDev[t]*β[t]) <= λ*(1 - 2*ξ[t])
-        )
-        =#
+        # #= default (unscaled)
+        # γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
+        # @constraint(MP_inner,
+        #     s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
+        #         +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
+        #         -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
+        #         +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
+        #         -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
+        #         -sum(γ[t] for t in 1:R.T)
+        #         +sum(λ*ξ[t] for t in 1:R.T)
+        # )
+        # @constraint(MP_inner, [t in 1:R.T],
+        #     -γ[t] - (R.DemandDev[t]*β[t]) <= λ*(1 - 2*ξ[t])
+        # )
+        
         ###= scale gamma
         γ = @variable(MP_inner, [1:R.T])
         @constraint(MP_inner,
@@ -437,6 +437,38 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
             γ[t] <= (R.DemandDev[t]*β[t]/λ) + (1 - ξ[t])
         )
         ##=#
+    end
+
+    if master_inner ∈ [CCGM2]
+        γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
+        @constraint(MP_inner,
+            s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
+                +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
+                -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
+                +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
+                -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
+                -sum(γ[t] for t in 1:R.T)
+                +sum(R.DemandDev[t]*R.PenaltyCost[t]*ξ[t] for t in 1:R.T)
+        )
+        @constraint(MP_inner, [t in 1:R.T],
+            R.DemandDev[t]*R.PenaltyCost[t]*ξ[t] <= γ[t] + R.DemandDev[t]*β[t]
+        )
+
+        # γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
+        # @constraint(MP_inner,
+        #     s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
+        #         +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
+        #         -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
+        #         +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
+        #         -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
+        #         +sum(R.DemandDev[t] * R.PenaltyCost[t] * γ[t] for t in 1:R.T)
+        # )
+        # @constraint(MP_inner, [t in 1:R.T],
+        #     γ[t] <= ξ[t]
+        # )
+        # @constraint(MP_inner, [t in 1:R.T],
+        #     γ[t] <= β[t]/R.PenaltyCost[t]
+        # )
     end
 
     if master_inner ∈ [CCGL]
@@ -496,6 +528,7 @@ function compute_lagrangian_coefficient(R::Rostering, MP_outer::JuMP.Model)
     U += sum(temparr[t] for t in 1:min(R.budget, R.T))
     @assert L <= U
 
+    return 500.0
     return U - L
 end
 
@@ -542,6 +575,14 @@ function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner
     end
     if master_inner ∈ [CCGM]
         @objective(m, Min, hexpr + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:R.T))
+    end
+    if master_inner ∈ [CCGM2]
+        @objective(m, Min, hexpr + sum(R.DemandDev[t]*R.PenaltyCost[t]*ξ[t]*(1-u[t]) for t in 1:R.T))
+    end
+
+    if master_inner ∈ [LinearizedDual]
+        @constraint(m, [t in 1:R.T], u[t] == ξ[t])
+        @objective(m, Min, hexpr)
     end
 
     return m

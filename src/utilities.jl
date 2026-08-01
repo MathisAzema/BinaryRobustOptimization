@@ -43,9 +43,9 @@ function initializeJuMPModel()
         m = Model(optimizer_with_attributes(
             () -> Gurobi.Optimizer(GUROBI_ENV),
             "OutputFlag" => 0,
-            "MIPGap" => 0.001,
+            "MIPGap" => 0.00001,
             "Threads" => THREADLIM,
-            "Presolve" => 1, #Presolve deactivated : 0, 1 otherwise
+            "Presolve" => 0, #Presolve deactivated : 0, 1 otherwise
         ))
         JuMP.set_silent(m)
         # JuMP.unset_silent(m)
