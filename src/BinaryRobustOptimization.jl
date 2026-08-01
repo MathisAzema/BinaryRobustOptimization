@@ -85,13 +85,11 @@ end
 
 include("problem.jl")
 include("rostering.jl")
-include("unitcommitment.jl")
-include("unitcommitmentcontinuous.jl")
 include("utilities.jl")
 include("algorithms.jl")
 
 export run_ccg, run_benders, solve_deterministic_problem, test2
-export Rostering, UnitCommitment, UnitCommitmentContinuous
+export Rostering
 export SubproblemType, LinearizedKKT, IndicatorKKT, LinearizedDual, IndicatorDual, PdDoublePrimeUL, Enumeration
 export PdM, PdPrimeM, HatPdPrimeM, PdDoublePrimeM, HatPdDoublePrimeM
 export five_lagrangian_formulations
