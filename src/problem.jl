@@ -3,7 +3,7 @@
     SubproblemType
 
 Enum representing the subproblem type. Possible values are `LinearizedKKT`,
-`IndicatorKKT`, `LinearizedDual`, `IndicatorDual` and `CCGM`.
+`IndicatorKKT`, `LinearizedDual`, `IndicatorDual` and `PdDoublePrimeUL`.
 """
 @enum(
     SubproblemType,
@@ -11,12 +11,26 @@ Enum representing the subproblem type. Possible values are `LinearizedKKT`,
     IndicatorKKT,
     LinearizedDual,
     IndicatorDual,
-    CCGM,
-    CCGM2,
-    CCGL,
-    CCGLDC,
-    Enumeration
+    PdDoublePrimeUL,
+    Enumeration,
+    PdM,
+    PdPrimeM,
+    HatPdPrimeM,
+    PdDoublePrimeM,
+    HatPdDoublePrimeM
 )
+
+"""The five exact MILP reformulations developed in the companion article."""
+five_lagrangian_formulations() = (
+    PdM,
+    PdPrimeM,
+    HatPdPrimeM,
+    PdDoublePrimeM,
+    HatPdDoublePrimeM,
+)
+
+uses_binary_auxiliary_copy(method::SubproblemType) =
+    method in (HatPdPrimeM, HatPdDoublePrimeM)
 """
     MasterType
 
@@ -214,7 +228,7 @@ In the third version, the model must be built using the
 first-stage decisions in the solved outer-level master model `MP_outer`,
 the discrete second-stage decisions stored in the `discrete_decision_list`
 dictionary, and the `master_inner` type of the inner-level master model.
-The Lagrangian coefficient `λ` must be `Float64` if `master_inner == CCGM`.
+The Lagrangian coefficient `λ` must be `Float64` if `master_inner == PdDoublePrimeUL`.
 """
 function init_master_inner_level end
 
@@ -225,7 +239,7 @@ Update the inner-level master model `MP_inner` based on the optimal values
 of the outer-level master model `MP_outer`, the subproblem model `SP`, and
 the `master_inner` type of the inner-level master model.
 
-The Lagrangian coefficient `λ` must be `Float64` if `master_inner == CCGM`.
+The Lagrangian coefficient `λ` must be `Float64` if `master_inner == PdDoublePrimeUL`.
 
 Must be implemented if `mixed_integer_recourse(problem) = true`.
 """

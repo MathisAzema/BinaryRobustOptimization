@@ -19,7 +19,7 @@ function run_ccg(
             @error("to do - CCG algorithm for mixed-integer instances without complete recourse")
             return nothing
         end
-        if subproblemtype == CCGM && indicator_uncertainty(problem)
+        if subproblemtype == PdDoublePrimeUL && indicator_uncertainty(problem)
             @error("to do - CCG algorithm for mixed-integer instances with indicator uncertainties")
             return nothing
         end
@@ -36,7 +36,7 @@ function run_ccg_mixed_integer_recourse(
     feas_tol::Float64,
 )
     @assert complete_recourse(problem)
-    @assert subproblemtype != CCGM || !indicator_uncertainty(problem)
+    @assert subproblemtype != PdDoublePrimeUL || !indicator_uncertainty(problem)
 
     masterproblemtype = CCG
     LB = -Inf
@@ -49,7 +49,7 @@ function run_ccg_mixed_integer_recourse(
     MP_outer = init_master(problem)
 
     λ = nothing
-    if subproblemtype == CCGM
+    if subproblemtype == PdDoublePrimeUL
         λ = 1.0
     end
 
@@ -70,9 +70,8 @@ function run_ccg_mixed_integer_recourse(
         UB_inner = +Inf
         ξ = [0 for t in 1:problem.T]
         MP_inner = init_master_inner_level(problem, subproblemtype)
-        discrete_decision_list = Dict()
 
-        if subproblemtype == CCGM
+        if subproblemtype == PdDoublePrimeUL
             λ = max(λ, compute_lagrangian_coefficient(problem, MP_outer))
         end
 
@@ -94,48 +93,20 @@ function run_ccg_mixed_integer_recourse(
         else
             while time() - start_t <= time_limit
                 ub = -Inf
-                DCheuristic = false
-                if subproblemtype == CCGLDC
-                    ub_fw = solve_MP_FW(problem, MP_inner, ξ)
-                    println((ub_fw, LB_inner, UB_inner))
-                    if ub_fw <= 1.001* LB_inner
-                        println("HHH")
-                        JuMP.unfix.(MP_inner[:ξ])
-                        start = time()
-                        ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
-                        push!(Time_MP_inner_iter, time()-start)
+                start = time()
+                ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
+                push!(Time_MP_inner_iter, time()-start)
 
-                        if isnan(ub) # non-normal termination
-                            normal_termination = false
-                            break
-                        end
-                        UB_inner = min(UB_inner, ub)
-                    else
-                        DCheuristic = true
-                        ub = ub_fw
-                    end
-                else
-                    start = time()
-                    JuMP.set_silent(MP_inner)
-                    if iter_inner[end] == 10
-                        JuMP.unset_silent(MP_inner)
-                    end
-                    ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
-                    push!(Time_MP_inner_iter, time()-start)
-
-                    if isnan(ub) # non-normal termination
-                        normal_termination = false
-                        break
-                    end
-                    UB_inner = min(UB_inner, ub)
+                if isnan(ub) # non-normal termination
+                    normal_termination = false
+                    break
                 end
+                UB_inner = min(UB_inner, ub)
                 UB = min(UB, UB_inner)
                 iter_inner[end] += 1
 
                 SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
                 lb = solve_SP(problem, SP, time_limit - (time() - start_t))
-
-                println([t for t in 1:problem.T if value(MP_inner[:ξ][t]) > 0.5])
 
                 if !isfinite(lb) # non-normal termination
                     normal_termination = false
@@ -149,13 +120,12 @@ function run_ccg_mixed_integer_recourse(
                     end
                 end
 
-                if subproblemtype == CCGM
+                if subproblemtype == PdDoublePrimeUL
                     while true
                         step = compute_grad_lagrangian(problem, SP, MP_inner)
                         if step <= feas_tol
                             break
                         end
-                        println("Updating λ, step = $step, λ = $λ")
                         λ *= 2.0
                         SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
                         lb = solve_SP(problem, SP, time_limit - (time() - start_t))
@@ -164,37 +134,6 @@ function run_ccg_mixed_integer_recourse(
 
                 # Print progress
                 print_progress(iter_inner[end], LB_inner, UB_inner, time() - start_t, λ, true)
-
-                if record_discrete_second_stage_decision(problem, SP, discrete_decision_list)
-                    if DCheuristic
-                        JuMP.unfix.(MP_inner[:ξ])
-                        start = time()
-                        ub = solve_MP(problem, MP_inner, time_limit - (time() - start_t))
-                        push!(Time_MP_inner_iter, time()-start)
-
-                        if isnan(ub) # non-normal termination
-                            normal_termination = false
-                            break
-                        end
-                        UB_inner = min(UB_inner, ub)
-
-                        SP = build_second_stage_problem(problem, MP_outer, MP_inner, subproblemtype, λ)
-                        lb = solve_SP(problem, SP, time_limit - (time() - start_t))
-
-                        if !isfinite(lb) # non-normal termination
-                            normal_termination = false
-                            break
-                        end
-                        if lb > LB_inner
-                            LB_inner = lb
-                            for t in 1:problem.T
-                                ξ[t] = Float64.(Int.(round(value(MP_inner[:ξ][t]))))
-                            end
-                        end
-                    else
-                        break
-                    end
-                end
 
                 # Terminate or update master
                 if gap(UB_inner, LB_inner) > opt_tol
@@ -226,109 +165,4 @@ function run_ccg_mixed_integer_recourse(
 
     computational_time = round(time() - start_t, digits = 2)
     return return_solution(problem, computational_time, time_limit, LB, UB, Time_MP_inner, subproblemtype)
-end
-
-function run_iterative_continuous_recourse(
-    problem::AbstractProblem,
-    masterproblemtype::MasterType,
-    subproblemtype::SubproblemType,
-    time_limit::Float64,
-    opt_tol::Float64,
-    feas_tol::Float64,
-)
-    @assert !mixed_integer_recourse(problem)
-    @assert masterproblemtype != Benders || subproblemtype ∉ [LinearizedKKT, IndicatorKKT]
-
-    LB = -Inf
-    UB = +Inf
-    iter = 0
-    start_t = time()
-    scenario_list = Dict()
-
-    SP = JuMP.Model()
-    MP = init_master(problem)
-
-    λ = nothing
-    if subproblemtype == CCGM
-        λ = compute_lagrangian_coefficient(problem, MP)
-    end
-
-    Time_W =[]
-
-    while time() - start_t <= time_limit
-        iter += 1
-        ξ = [0 for t in 1:problem.T]
-
-        lb = solve_MP(problem, MP, time_limit - (time() - start_t))
-        if !isfinite(lb) 
-            break  # infeasible or non-normal termination
-        end
-        LB = max(LB, lb)
-
-        # println((LB,UB))
-
-        if gap(UB, LB) <= opt_tol
-            break
-        end
-
-        SP = build_sp(problem, MP, subproblemtype, λ)
-        start = time()
-        undo_relax = JuMP.relax_integrality(SP)
-        optimize!(SP)
-        println(JuMP.objective_value(SP))
-        println(JuMP.value.(SP[:ξ]))
-        if subproblemtype == CCGM2
-            println(JuMP.value.(SP[:σ]))
-            println(round.(JuMP.value.(SP[:αr]), digits = 2))
-        end
-        undo_relax()
-
-        # JuMP.unset_silent(SP)
-        ub = solve_SP(problem, SP, time_limit - (time() - start_t))
-        if subproblemtype == CCGM2
-            println(JuMP.value.(SP[:ξ]))
-            println(round.(JuMP.value.(SP[:σ]), digits = 2))
-            println(round.(JuMP.value.(SP[:αr]), digits = 2))
-        elseif subproblemtype == CCGL
-            println(JuMP.value.(SP[:ξ]))
-            println(round.(JuMP.value.(SP[:α]), digits = 2))
-        end
-        if subproblemtype == CCGM
-            while true
-                step = solve_second_stage_problem_lagrangian(problem, MP, SP, λ)
-                if step <= feas_tol
-                    break
-                end
-                println("Updating λ, step = $step, λ = $λ")
-                λ *= 2.0
-                SP = build_sp(problem, MP, subproblemtype, λ)
-                ub = solve_SP(problem, SP, time_limit - (time() - start_t))
-            end
-        end
-
-        push!(Time_W, time() - start)
-
-        UB = min(UB, ub)
-
-        for t in 1:problem.T
-            ξ[t] = Float64.(Int.(round(value(SP[:ξ][t]))))
-        end
-
-        # Optimality subproblem
-
-        # Print progress
-        print_progress(iter, LB, UB, time() - start_t, λ)
-
-        if record_scenario(problem, ξ, scenario_list)
-            break
-        end
-
-        if gap(UB, LB) > opt_tol
-            update_master_continous(problem, MP, ξ, masterproblemtype)
-        else
-            break
-        end
-    end
-    computational_time = round(time() - start_t, digits = 2)
-    return return_solution(problem, computational_time, time_limit, LB, UB, Time_W, subproblemtype)
 end

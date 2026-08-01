@@ -90,6 +90,19 @@ objective_scale(R::Rostering) = 1.0
 
 indicator_uncertainty(R::Rostering) = false
 
+"""
+    componentwise_multiplier_upper_bound(R::Rostering)
+
+Return the explicit bound `H' * c_pen` from Assumption (A4).  For the
+rostering model, `H = Diagonal(DemandDev)` and `c_pen = PenaltyCost`.
+"""
+componentwise_multiplier_upper_bound(R::Rostering) =
+    R.DemandDev .* R.PenaltyCost
+
+"""Return the scalar multiplier used by the two scalar reformulations."""
+scalar_multiplier_bound(R::Rostering) =
+    maximum(componentwise_multiplier_upper_bound(R))
+
 function solve_deterministic_problem(R::Rostering, xval = nothing)
     m = initializeJuMPModel()
 
@@ -216,14 +229,6 @@ function init_master_inner_level(R::Rostering, master_inner::SubproblemType)
     )
     @objective(m, Max, s)
 
-    if master_inner ∈ [CCGL]
-        @variable(m, μ[1:R.T]>=0)
-        @variable(m, δ[1:R.T]>=0)
-        @constraint(m, [t in 1:R.T], δ[t] <= R.DemandDev[t]*R.PenaltyCost[t]*ξ[t])
-        @constraint(m, [t in 1:R.T], δ[t] <= μ[t])
-        # @constraint(m, [t in 1:R.T], δ[t] >= μ[t] - R.DemandDev[t]*R.PenaltyCost[t]*(1 - ξ[t]))
-    end
-
     return m
 end
 
@@ -242,16 +247,32 @@ function init_master_inner_level(R::Rostering, MP_inner::JuMP.Model)
 end
 
 function init_master_inner_level(R::Rostering, MP_outer::JuMP.Model, discrete_decision_list::Dict, master_inner::SubproblemType, λ = nothing)
-    m = init_master_inner_level(R)
+    m = init_master_inner_level(R, master_inner)
     x = JuMP.value.(MP_outer[:x])
     x = Float64.(Int.(round.(x))) # should be 0-1
 
-    for schedule in keys(discrete_decision_list)
+    for stored_decision in keys(discrete_decision_list)
+        schedule, auxiliary_copy = if uses_binary_auxiliary_copy(master_inner)
+            stored_schedule, active_auxiliary_indices = stored_decision
+            stored_auxiliary_copy = zeros(R.T)
+            stored_auxiliary_copy[collect(active_auxiliary_indices)] .= 1.0
+            (stored_schedule, stored_auxiliary_copy)
+        else
+            (stored_decision, nothing)
+        end
         y = zeros(R.J, R.T)
         for (j, t) in schedule
             y[j,t] = 1
         end
-        update_master_inner_level(R, m, x, y, master_inner, λ)
+        update_master_inner_level(
+            R,
+            m,
+            x,
+            y,
+            master_inner,
+            λ;
+            auxiliary_copy = auxiliary_copy,
+        )
     end
 
     return m
@@ -263,22 +284,33 @@ function update_master_inner_level(R::Rostering, MP_outer::JuMP.Model, MP_inner:
     y = JuMP.value.(SP_inner[:y])
     y = Float64.(Int.(round.(y))) # should be 0-1
 
-    update_master_inner_level(R, MP_inner, x, y, master_inner, λ)
+    auxiliary_copy = nothing
+    if uses_binary_auxiliary_copy(master_inner)
+        auxiliary_copy = JuMP.value.(SP_inner[:u])
+        auxiliary_copy = Float64.(Int.(round.(auxiliary_copy)))
+    end
+
+    update_master_inner_level(
+        R,
+        MP_inner,
+        x,
+        y,
+        master_inner,
+        λ;
+        auxiliary_copy = auxiliary_copy,
+    )
 end
 
-function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, master_inner::SubproblemType, λ = nothing)
+function update_master_inner_level(
+    R::Rostering,
+    MP_inner::JuMP.Model,
+    x,
+    y,
+    master_inner::SubproblemType,
+    λ = nothing;
+    auxiliary_copy = nothing,
+)
 
-    if master_inner ∈ [CCGL]
-        μ = MP_inner[:μ]
-        δ = MP_inner[:δ]
-        # println(JuMP.value.(μ))
-        # println(JuMP.value.(δ))
-
-        # if length(R.β) >= 1
-        #     println(length(R.β))
-        #     println([minimum([value(R.γ[i][t]) + R.DemandDev[t]*value(R.β[i][t]) for i in 1:length(R.β)]) for t in 1:R.T])
-        # end
-    end
     s = MP_inner[:s]
     ξ = MP_inner[:ξ]
 
@@ -294,6 +326,93 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
     @constraint(MP_inner, [t in 1:R.T],
         β[t] <= R.PenaltyCost[t]
     )
+
+    if master_inner in five_lagrangian_formulations()
+        multiplier_ub = componentwise_multiplier_upper_bound(R)
+        base_dual_value = @expression(
+            MP_inner,
+            sum(R.FixedCostRegular[i,t] * x[i,t] for i in 1:R.I, t in 1:R.T) +
+            sum(R.FixedCostPartTime[j,t] * y[j,t] for j in 1:R.J, t in 1:R.T) -
+            sum(R.N * y[j,t] * α[j,t] for j in 1:R.J, t in 1:R.T) +
+            sum(R.DemandAvg[t] * β[t] for t in 1:R.T) -
+            sum(R.N * x[i,t] * β[t] for i in 1:R.I, t in 1:R.T)
+        )
+
+        if master_inner == PdM
+            # (P_d^M): delta_t linearizes
+            # mu_t * xi_t with mu_t = DemandDev_t * beta_t.
+            δ = @variable(MP_inner, [1:R.T])
+            @constraint(MP_inner, [t in 1:R.T],
+                δ[t] <= R.DemandDev[t] * β[t]
+            )
+            @constraint(MP_inner, [t in 1:R.T],
+                δ[t] <= multiplier_ub[t] * ξ[t]
+            )
+            @constraint(MP_inner, s <= base_dual_value + sum(δ))
+            return
+        end
+
+        if master_inner == PdPrimeM
+            # (P_d'^M): continuous auxiliary uncertainty and the fixed
+            # componentwise multiplier mu^M(xi) = Mbar .* xi.
+            σ = @variable(MP_inner, [1:R.T], lower_bound = 0)
+            @constraint(MP_inner, [t in 1:R.T],
+                multiplier_ub[t] * ξ[t] <= σ[t] + R.DemandDev[t] * β[t]
+            )
+            @constraint(
+                MP_inner,
+                s <= base_dual_value +
+                     sum(multiplier_ub[t] * ξ[t] - σ[t] for t in 1:R.T)
+            )
+            return
+        end
+
+        if master_inner == HatPdPrimeM
+            # (hat P_d'^M): both the part-time schedule and the auxiliary
+            # uncertainty vector are fixed by the generated inner-CCG column.
+            auxiliary_copy === nothing &&
+                error("HatPdPrimeM requires a binary auxiliary copy")
+            @constraint(
+                MP_inner,
+                s <= base_dual_value +
+                     sum(R.DemandDev[t] * β[t] * auxiliary_copy[t] for t in 1:R.T) +
+                     sum(multiplier_ub[t] * ξ[t] * (1 - auxiliary_copy[t]) for t in 1:R.T)
+            )
+            return
+        end
+
+        if master_inner == PdDoublePrimeM
+            # (P_d''^M): continuous auxiliary uncertainty and scalar
+            # multiplier pi^M = ||Mbar||_infinity.
+            πM = scalar_multiplier_bound(R)
+            σ = @variable(MP_inner, [1:R.T], lower_bound = 0)
+            @constraint(MP_inner, [t in 1:R.T],
+                πM * (2ξ[t] - 1) <= σ[t] + R.DemandDev[t] * β[t]
+            )
+            @constraint(
+                MP_inner,
+                s <= base_dual_value + sum(πM * ξ[t] - σ[t] for t in 1:R.T)
+            )
+            return
+        end
+
+        if master_inner == HatPdDoublePrimeM
+            # (hat P_d''^M): binary auxiliary copy and scalar multiplier.
+            auxiliary_copy === nothing &&
+                error("HatPdDoublePrimeM requires a binary auxiliary copy")
+            πM = scalar_multiplier_bound(R)
+            @constraint(
+                MP_inner,
+                s <= base_dual_value +
+                     sum(R.DemandDev[t] * β[t] * auxiliary_copy[t] for t in 1:R.T) +
+                     πM * sum(
+                         ξ[t] + auxiliary_copy[t] - 2ξ[t] * auxiliary_copy[t]
+                         for t in 1:R.T
+                     )
+            )
+            return
+        end
+    end
 
     if master_inner ∈ [LinearizedKKT, IndicatorKKT]
         z = @variable(MP_inner, [1:R.J,1:R.T], lower_bound = 0)
@@ -404,7 +523,7 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         end
     end
 
-    if master_inner ∈ [CCGM]
+    if master_inner ∈ [PdDoublePrimeUL]
         # #= default (unscaled)
         # γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
         # @constraint(MP_inner,
@@ -438,76 +557,6 @@ function update_master_inner_level(R::Rostering, MP_inner::JuMP.Model, x, y, mas
         )
         ##=#
     end
-
-    if master_inner ∈ [CCGM2]
-        γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
-        @constraint(MP_inner,
-            s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-                +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-                -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
-                +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
-                -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
-                -sum(γ[t] for t in 1:R.T)
-                +sum(R.DemandDev[t]*R.PenaltyCost[t]*ξ[t] for t in 1:R.T)
-        )
-        @constraint(MP_inner, [t in 1:R.T],
-            R.DemandDev[t]*R.PenaltyCost[t]*ξ[t] <= γ[t] + R.DemandDev[t]*β[t]
-        )
-
-        # γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
-        # @constraint(MP_inner,
-        #     s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-        #         +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-        #         -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
-        #         +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
-        #         -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
-        #         +sum(R.DemandDev[t] * R.PenaltyCost[t] * γ[t] for t in 1:R.T)
-        # )
-        # @constraint(MP_inner, [t in 1:R.T],
-        #     γ[t] <= ξ[t]
-        # )
-        # @constraint(MP_inner, [t in 1:R.T],
-        #     γ[t] <= β[t]/R.PenaltyCost[t]
-        # )
-    end
-
-    if master_inner ∈ [CCGL]
-        μ = MP_inner[:μ]
-        δ = MP_inner[:δ]
-        # σ = @variable(MP_inner, lower_bound = 0)
-        γ = @variable(MP_inner, [1:R.T], lower_bound = 0)
-        push!(R.γ, γ)
-        @constraint(MP_inner,
-            s <= sum(R.FixedCostRegular[i,t]*x[i,t] for i in 1:R.I, t in 1:R.T)
-                +sum(R.FixedCostPartTime[j,t]*y[j,t] for j in 1:R.J, t in 1:R.T)
-                -sum(R.N*y[j,t]*α[j,t] for j in 1:R.J, t in 1:R.T)
-                +sum(R.DemandAvg[t]*β[t] for t in 1:R.T)
-                -sum(R.N*x[i,t]*β[t] for i in 1:R.I, t in 1:R.T)
-                -sum(γ[t] for t in 1:R.T)
-                +sum(δ[t] for t in 1:R.T)
-                # + sum(0.001*μ[t] for t in 1:R.T)
-                # - σ*R.budget
-        )
-        # @constraint(MP_inner, [t in 1:R.T],
-        #      μ[t] <= γ[t] + R.DemandDev[t]*β[t] + σ
-        # )
-        @constraint(MP_inner, [t in 1:R.T],
-             μ[t] <= γ[t] + R.DemandDev[t]*β[t]
-        )
-
-        # optimize!(MP_inner)
-        # println(JuMP.value.(μ))
-        # println(JuMP.value.(β))
-        # println(JuMP.value.(γ))
-        # # println(JuMP.value.(σ))
-        # println(JuMP.value.(δ))
-
-        # if length(R.β) >= 1
-        #     println(length(R.β))
-        #     println([minimum([value(R.γ[i][t]) + R.DemandDev[t]*value(R.β[i][t]) for i in 1:length(R.β)]) for t in 1:R.T])
-        #     println([value(R.γ[i][6]) + R.DemandDev[6]*value(R.β[i][6]) for i in 1:length(R.β)])
-        # end
-    end
 end
 
 function compute_lagrangian_coefficient(R::Rostering, MP_outer::JuMP.Model)
@@ -528,7 +577,6 @@ function compute_lagrangian_coefficient(R::Rostering, MP_outer::JuMP.Model)
     U += sum(temparr[t] for t in 1:min(R.budget, R.T))
     @assert L <= U
 
-    return 500.0
     return U - L
 end
 
@@ -558,6 +606,9 @@ function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner
 
     @variable(m, u[t in 1:R.T]>=0)
     @constraint(m, [t in 1:R.T], u[t] <= 1)
+    if uses_binary_auxiliary_copy(master_inner)
+        set_binary.(u)
+    end
 
     @constraint(m, [t in 1:R.T],
         sum(R.N*x[i,t] for i in 1:R.I) + sum(z[j,t] for j in 1:R.J) + w[t] >= R.DemandAvg[t] + (R.DemandDev[t]*u[t])
@@ -569,15 +620,30 @@ function build_second_stage_problem(R::Rostering, MP_outer::JuMP.Model, MP_inner
             +sum(R.PenaltyCost[t]*w[t] for t in 1:R.T)
     )
         
-    if master_inner ∈ [CCGL]
-        μ = JuMP.value.(MP_inner[:μ])
-        @objective(m, Min, hexpr + sum(μ[t]*(ξ[t]-u[t]) for t in 1:R.T))
-    end
-    if master_inner ∈ [CCGM]
+    if master_inner ∈ [PdDoublePrimeUL]
         @objective(m, Min, hexpr + sum(λ*(((1 - 2ξ[t])*u[t]) + ξ[t]) for t in 1:R.T))
     end
-    if master_inner ∈ [CCGM2]
-        @objective(m, Min, hexpr + sum(R.DemandDev[t]*R.PenaltyCost[t]*ξ[t]*(1-u[t]) for t in 1:R.T))
+
+    if master_inner in (PdM, Enumeration)
+        # Separation for (P_d^M) is the original recourse problem at xi.
+        JuMP.fix.(u, ξ; force = true)
+        @objective(m, Min, hexpr)
+    end
+    if master_inner in (PdPrimeM, HatPdPrimeM)
+        multiplier_ub = componentwise_multiplier_upper_bound(R)
+        @objective(
+            m,
+            Min,
+            hexpr + sum(multiplier_ub[t] * ξ[t] * (1 - u[t]) for t in 1:R.T)
+        )
+    end
+    if master_inner in (PdDoublePrimeM, HatPdDoublePrimeM)
+        πM = scalar_multiplier_bound(R)
+        @objective(
+            m,
+            Min,
+            hexpr + πM * sum(ξ[t] + u[t] - 2ξ[t] * u[t] for t in 1:R.T)
+        )
     end
 
     if master_inner ∈ [LinearizedDual]
@@ -606,10 +672,19 @@ function record_discrete_second_stage_decision(R::Rostering, SP_inner::JuMP.Mode
             push!(schedule, (j,t))
         end
     end
+    stored_decision = schedule
+    if haskey(JuMP.object_dictionary(SP_inner), :u) &&
+       all(JuMP.is_binary, SP_inner[:u])
+        auxiliary_copy = JuMP.value.(SP_inner[:u])
+        auxiliary_copy = Float64.(Int.(round.(auxiliary_copy)))
+        active_auxiliary_indices = Tuple(findall(>(0.5), auxiliary_copy))
+        stored_decision = (schedule, active_auxiliary_indices)
+    end
+
     in_list = true
-    if !haskey(discrete_decision_list, schedule)
+    if !haskey(discrete_decision_list, stored_decision)
         in_list = false
-        discrete_decision_list[schedule] = true
+        discrete_decision_list[stored_decision] = true
     end
 
     return in_list
@@ -631,47 +706,6 @@ function record_scenario(R::Rostering, ξ::Vector{Int64}, scenario_list::Dict)
     return in_list
 end
 
-function solve_MP_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
-    println("FW inner level solving...")
-    println([t for t in 1:R.T if previous_scenario[t] > 1e-6])
-    ξ_k = ones(R.T)
-    ξ_k1 = previous_scenario
-    k = 0
-    while 0 <= k <= 50 && sum(abs.(ξ_k1 .- ξ_k)) >= 1
-        ξ_k = copy(ξ_k1)
-        k += 1
-        JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
-        optimize!(MP_inner)
-        ξ_k1 = determine_gradient_FW(R, MP_inner, previous_scenario)
-        JuMP.unfix.(MP_inner[:ξ])
-        println(sum(abs.(ξ_k1 .- ξ_k)))
-    end
-    JuMP.fix.(MP_inner[:ξ], ξ_k; force = true)
-    optimize!(MP_inner)
-    println("FW inner level finished.")
-    return JuMP.objective_value(MP_inner)
-end
-
-function determine_gradient_FW(R::Rostering, MP_inner::JuMP.Model, previous_scenario::Vector{Int64})
-    println("previous ",[t for t in 1:R.T if previous_scenario[t] > 1e-6])
-    m = initializeJuMPModel()
-    @variable(m, ξ[1:R.T]>=0)
-    @constraint(m, sum(ξ[t] for t in 1:R.T) <= R.budget)
-    @constraint(m, [t in 1:R.T], ξ[t] <= 1)
-    @constraint(m, sum(ξ[t] * previous_scenario[t] for t in 1:R.T) <= R.budget - 1)
-    μval2 = JuMP.value.(MP_inner[:μ])
-    if length(R.β) >= 1
-        μval = [minimum([value(R.γ[i][t]) + R.DemandDev[t]*value(R.β[i][t]) for i in 1:length(R.β)]) for t in 1:R.T]
-    else
-        μval = JuMP.value.(MP_inner[:μ])
-    end
-    println(round.(μval))
-    @objective(m, Max, sum(μval[t]*ξ[t] for t in 1:R.T))
-    optimize!(m)
-    println([t for t in 1:R.T if JuMP.value(m[:ξ][t]) > 1e-6])
-    return JuMP.value.(m[:ξ])
-end
-
 function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner::JuMP.Model, time_limit::Float64)
     possible_scenarios = generate_all_Γ_tuple(R.T, R.budget)
     obj_max = -1
@@ -681,7 +715,7 @@ function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner
             fix(MP_inner[:ξ][t], scenario[t])
         end
         optimize!(MP_inner)
-        SP = build_second_stage_problem(R, MP_outer, MP_inner)
+        SP = build_second_stage_problem(R, MP_outer, MP_inner, Enumeration)
         lb = solve_SP(R, SP, time_limit)
         if isnan(lb)
             return NaN
@@ -699,7 +733,7 @@ function solve_MP_inner_enumeration(R::Rostering, MP_outer::JuMP.Model, MP_inner
 end
 
 function return_solution(R::Rostering, computational_time::Float64, timelimit::Float64, LB::Float64, UB::Float64, Time_MP_inner::Vector{Vector{Float64}}, subproblemtype::SubproblemType)
-    name_csv = "$(R.name)_$(subproblemtype)_"*string(Int(timelimit))
+    name_csv = "$(R.name)_$(subproblemtype)_$(R.budget)_$(Int(timelimit))"
     # write results to CSV (long format: one datum per line)
     try
         df = DataFrame(
@@ -710,12 +744,19 @@ function return_solution(R::Rostering, computational_time::Float64, timelimit::F
         )
         # scalars
         push!(df, ("name", "$(R.name)_$(subproblemtype)", missing, missing))
+        push!(df, ("method", string(subproblemtype), missing, missing))
+        push!(df, ("I", string(R.I), missing, missing))
+        push!(df, ("J", string(R.J), missing, missing))
         push!(df, ("T", string(R.T), missing, missing))
         push!(df, ("budget", string(R.budget), missing, missing))
+        push!(df, ("time_limit", string(timelimit), missing, missing))
         push!(df, ("Time", string(computational_time), missing, missing))
         push!(df, ("LB", string(LB), missing, missing))
         push!(df, ("UB", string(UB), missing, missing))
         push!(df, ("gap", string(gap(UB, LB)*100), missing, missing))
+        push!(df, ("outer_iterations", string(length(Time_MP_inner)), missing, missing))
+        push!(df, ("inner_iterations", string(sum(length, Time_MP_inner)), missing, missing))
+        push!(df, ("scalar_multiplier", string(scalar_multiplier_bound(R)), missing, missing))
         # arrays
         for (iter_idx, vec) in enumerate(Time_MP_inner)
             for (pos_idx, val) in enumerate(vec)
@@ -723,9 +764,10 @@ function return_solution(R::Rostering, computational_time::Float64, timelimit::F
             end
         end
         filepath = joinpath(pwd(), "results/Rostering", name_csv*".csv")
+        mkpath(dirname(filepath))
         CSV.write(filepath, df)
     catch e
         @warn("Failed to write results CSV", error = e)
     end
-    return name_csv, R.T, R.budget, computational_time, round(LB, digits=2), round(gap(UB, LB), digits=2), Time_MP_inner
+    return name_csv, R.T, R.budget, computational_time, round(LB, digits=6), round(gap(UB, LB), digits=8), Time_MP_inner
 end
