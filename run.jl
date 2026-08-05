@@ -7,12 +7,16 @@ Pkg.activate(".")
 using Distributed
 
 Nbworkers = 10
+println(nworkers())
 if nworkers() >= Nbworkers+1
     rmprocs(workers())
     addprocs(Nbworkers)
+elseif nworkers() ==1
+    addprocs(Nbworkers - nworkers()+1)
 else
     addprocs(Nbworkers - nworkers())
 end
+println(nworkers())
 
 # Ensure package availability on workers
 @everywhere using BinaryRobustOptimization

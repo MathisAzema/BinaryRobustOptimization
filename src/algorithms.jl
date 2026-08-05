@@ -15,10 +15,10 @@ function run_ccg(
     problem::AbstractProblem,
     subproblemtype::SubproblemType,
     time_limit::Float64,
-    opt_tol::Float64=1e-3,
-    feas_tol::Float64=1e-5,
     ;
     inner_presolve::Bool=true,
+    opt_tol::Float64=1e-3,
+    feas_tol::Float64=1e-5,
 )
     if mixed_integer_recourse(problem)
         if !complete_recourse(problem)
