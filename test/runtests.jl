@@ -2,6 +2,51 @@ using Test
 using JuMP
 using BinaryRobustOptimization
 
+include(joinpath(@__DIR__, "..", "experiments", "analyze_rostering_results.jl"))
+
+@testset "Article definition of tau_bar" begin
+    records = [
+        RunRecord(
+            1, 21, 3, "PdM", true, 7200.0, 10.0, 0.0,
+            [(1, 2.0), (2, 8.0)],
+            "run-1.csv",
+        ),
+        RunRecord(
+            2, 21, 3, "PdM", true, 7200.0, 12.0, 0.0,
+            [(1, 4.0)],
+            "run-2.csv",
+        ),
+    ]
+
+    statistics = aggregate(records)
+
+    # t_bar[1] = 3 and t_bar[2] = 8, hence
+    # tau_bar = (t_bar[1] / 1 + t_bar[2] / 2) / 2 = 3.5.
+    @test statistics.mean_normalized_worst_case_time == 3.5
+    @test statistics.mean_worst_cases == 1.5
+
+    mktempdir() do directory
+        path = joinpath(directory, "1_21_PdM_3_presolve_on_7200.csv")
+        write(
+            path,
+            "metric,value,i,j\n" *
+            "method,PdM,,\n" *
+            "T,21,,\n" *
+            "budget,3,,\n" *
+            "inner_presolve,true,,\n" *
+            "time_limit,7200.0,,\n" *
+            "Time,10.0,,\n" *
+            "gap,0.0,,\n" *
+            "inner_iterations,2,,\n" *
+            "Time_per_iteration,2.0,1,1\n" *
+            "Time_per_iteration,8.0,1,2\n",
+        )
+
+        record = parse_result_file(path)
+        @test record.inner_master_times == [(1, 2.0), (2, 8.0)]
+    end
+end
+
 function tiny_rostering_instance()
     R = Rostering(2, 1, 1, 1)
     R.name = "tiny"

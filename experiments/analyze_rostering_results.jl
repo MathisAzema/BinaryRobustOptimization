@@ -22,10 +22,11 @@ const DEFAULT_TIME_LIMIT = 7200.0
 # in the CSV file, is at most 0.1%.
 const SOLVED_GAP_TOLERANCE_PERCENT = 0.1
 
-# Worst-case statistics use every available instance, whether or not the
-# complete rostering instance reached the target optimality gap. The final
-# timing observation of each run is excluded because it may be incomplete;
-# every retained time t[i,j,k] is normalized by its inner-iteration index k.
+# Worst-case statistics use every recorded inner-master solve, whether or not
+# the complete rostering instance reached the target optimality gap. For each
+# inner-iteration index j, t_bar[j] is first averaged over all outer iterations
+# and runs that reached j. The statistic tau_bar is then the unweighted mean of
+# t_bar[j] / j over the recorded inner-iteration indices, as in the article.
 
 const METHODS = [
     "PdM",
@@ -54,7 +55,7 @@ struct RunRecord
     time_limit::Float64
     elapsed_time::Float64
     gap_percent::Float64
-    normalized_worst_case_times::Vector{Float64}
+    inner_master_times::Vector{Tuple{Int, Float64}}
     path::String
 end
 
@@ -114,7 +115,7 @@ end
 
 function parse_result_file(path)
     scalars = Dict{String, String}()
-    normalized_worst_case_times = Float64[]
+    inner_master_times = Tuple{Int, Float64}[]
 
     for row in CSV.File(path; types = Dict(:metric => String, :value => String))
         metric = strip(row.metric)
@@ -138,21 +139,13 @@ function parse_result_file(path)
                 "Time_per_iteration",
                 path,
             )
-            push!(
-                normalized_worst_case_times,
-                worst_case_time / inner_iteration,
-            )
+            push!(inner_master_times, (inner_iteration, worst_case_time))
         elseif !isempty(metric)
             scalars[metric] = value
         end
     end
 
-    # The final inner-master solve of a run may have been interrupted by the
-    # global time limit. Exclude that last timing observation from every
-    # statistic, while retaining the unfiltered count for the consistency
-    # check against `inner_iterations` below.
-    recorded_worst_case_count = length(normalized_worst_case_times)
-    isempty(normalized_worst_case_times) || pop!(normalized_worst_case_times)
+    recorded_worst_case_count = length(inner_master_times)
 
     filename_match = match(r"^(\d+)_", basename(path))
     filename_match === nothing && error("Cannot read the seed from $(basename(path))")
@@ -176,7 +169,7 @@ function parse_result_file(path)
         ),
         parse_number(Float64, require_scalar(scalars, "Time", path), "Time", path),
         parse_number(Float64, require_scalar(scalars, "gap", path), "gap", path),
-        normalized_worst_case_times,
+        inner_master_times,
         path,
     )
 
@@ -246,13 +239,16 @@ function aggregate(records)
     end
 
     worst_case_counts = Int[]
-    normalized_worst_case_times = Float64[]
+    time_sums_by_iteration = Dict{Int, Float64}()
+    counts_by_iteration = Dict{Int, Int}()
     for record in records
-        push!(worst_case_counts, length(record.normalized_worst_case_times))
-        append!(
-            normalized_worst_case_times,
-            record.normalized_worst_case_times,
-        )
+        push!(worst_case_counts, length(record.inner_master_times))
+        for (inner_iteration, solve_time) in record.inner_master_times
+            time_sums_by_iteration[inner_iteration] =
+                get(time_sums_by_iteration, inner_iteration, 0.0) + solve_time
+            counts_by_iteration[inner_iteration] =
+                get(counts_by_iteration, inner_iteration, 0) + 1
+        end
     end
 
     mean_worst_cases = mean(worst_case_counts)
@@ -261,10 +257,13 @@ function aggregate(records)
     else
         mean(record.elapsed_time for record in solved_records)
     end
-    mean_time = if isempty(normalized_worst_case_times)
+    mean_time = if isempty(time_sums_by_iteration)
         missing
     else
-        mean(normalized_worst_case_times)
+        mean(
+            time_sums_by_iteration[j] / counts_by_iteration[j] / j
+            for j in keys(time_sums_by_iteration)
+        )
     end
     return AggregateStatistics(
         length(solved_records),
@@ -315,7 +314,7 @@ function write_presolve_table(io, records, selected_time_limit, presolve)
     println(io, "\\label{tab:rostering-worst-case-presolve-$presolve_label}")
     println(io, raw"\setlength{\tabcolsep}{3pt}")
     println(io, raw"\renewcommand{\arraystretch}{0.9}")
-    println(io, raw"\begin{tabular}{cc*{6}{c}}")
+    println(io, raw"\begin{tabular}{clc*{5}{c}}")
     println(io, raw"\toprule")
 
     header_cells = String[raw"$(T,k)$", "Statistic"]
@@ -406,4 +405,6 @@ function main(arguments = ARGS)
     println("LaTeX table written to $output_file")
 end
 
-main()
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

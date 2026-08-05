@@ -34,7 +34,7 @@ const METHOD_LABELS = Dict(
 
 # Color-blind-friendly colors distinguish the four continuous curves.
 const METHOD_COLORS = ["#0072B2", "#E69F00", "#009E73", "#CC79A7"]
-const MIN_INSTANCES_PER_POINT = 10
+const MIN_MASTER_SOLVES_PER_POINT = 10
 
 function usage()
     println(
@@ -98,7 +98,6 @@ function load_inner_time_averages(results_directory, selected_time_limit)
     # Key: (T, budget, method, presolve, inner iteration).
     time_sums = Dict{Tuple{Int, Int, String, Bool, Int}, Float64}()
     observation_counts = Dict{Tuple{Int, Int, String, Bool, Int}, Int}()
-    instance_counts = Dict{Tuple{Int, Int, String, Bool, Int}, Int}()
     files_used = 0
 
     for path in paths
@@ -109,7 +108,6 @@ function load_inner_time_averages(results_directory, selected_time_limit)
         time_limit = nothing
         used_this_file = false
         timing_rows = Tuple{Int, Float64}[]
-        iterations_seen_in_file = Set{Tuple{Int, Int, String, Bool, Int}}()
 
         for row in CSV.File(path; types = Dict(:metric => String, :value => String))
             metric = strip(row.metric)
@@ -157,18 +155,11 @@ function load_inner_time_averages(results_directory, selected_time_limit)
             end
         end
 
-        # The last inner-master solve in a run may have been stopped by the
-        # global time limit, so omit that final timing row before aggregating.
-        isempty(timing_rows) || pop!(timing_rows)
         for (inner_iteration, elapsed_time) in timing_rows
             key = (horizon, budget, method, presolve, inner_iteration)
             time_sums[key] = get(time_sums, key, 0.0) + elapsed_time
             observation_counts[key] = get(observation_counts, key, 0) + 1
-            push!(iterations_seen_in_file, key)
             used_this_file = true
-        end
-        for key in iterations_seen_in_file
-            instance_counts[key] = get(instance_counts, key, 0) + 1
         end
         files_used += used_this_file
     end
@@ -176,7 +167,7 @@ function load_inner_time_averages(results_directory, selected_time_limit)
     isempty(time_sums) && error(
         "No timing observation found for the requested methods and time limit",
     )
-    return time_sums, observation_counts, instance_counts, files_used
+    return time_sums, observation_counts, files_used
 end
 
 function problem_classes(time_sums, presolve)
@@ -211,7 +202,6 @@ end
 function method_series(
     time_sums,
     observation_counts,
-    instance_counts,
     horizon,
     budget,
     method,
@@ -227,7 +217,7 @@ function method_series(
     iterations = Int[]
     for iteration in candidate_iterations
         key = (horizon, budget, method, presolve, iteration)
-        get(instance_counts, key, 0) < MIN_INSTANCES_PER_POINT && break
+        get(observation_counts, key, 0) < MIN_MASTER_SOLVES_PER_POINT && break
         push!(iterations, iteration)
     end
     means = [
@@ -241,7 +231,6 @@ end
 function create_panel(
     time_sums,
     observation_counts,
-    instance_counts,
     presolve,
 )
     classes = problem_classes(time_sums, presolve)
@@ -273,7 +262,6 @@ function create_panel(
             iterations, means = method_series(
                 time_sums,
                 observation_counts,
-                instance_counts,
                 horizon,
                 budget,
                 method,
@@ -351,7 +339,7 @@ end
 function main(arguments = ARGS)
     results_directory, output_directory, selected_time_limit =
         parse_arguments(arguments)
-    time_sums, observation_counts, instance_counts, files_used =
+    time_sums, observation_counts, files_used =
         load_inner_time_averages(
             results_directory,
             selected_time_limit,
@@ -359,12 +347,12 @@ function main(arguments = ARGS)
 
     gr()
     save_panel(
-        create_panel(time_sums, observation_counts, instance_counts, true),
+        create_panel(time_sums, observation_counts, true),
         output_directory,
         true,
     )
     save_panel(
-        create_panel(time_sums, observation_counts, instance_counts, false),
+        create_panel(time_sums, observation_counts, false),
         output_directory,
         false,
     )
