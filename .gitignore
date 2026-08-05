@@ -28,9 +28,6 @@
 *.gls
 *.ist
 
-#---pdf 
-*.pdf
-
 #---bak
 *.bak
 
@@ -53,5 +50,5 @@ Thumbs.db
 *.~*
 
 # --- PDF output (optional) ---
-*.pdf
+# *.pdf
 *.csv

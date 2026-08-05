@@ -41,7 +41,7 @@ $(42, 9)$ & Solved & 1/10 & 1/10 & 1/10 & 1/10 & 0/10 & 0/10 \\
 \label{tab:rostering-worst-case-presolve-off}
 \setlength{\tabcolsep}{3pt}
 \renewcommand{\arraystretch}{0.9}
-\begin{tabular}{cc*{6}{c}}
+\begin{tabular}{clc*{5}{c}}
 \toprule
 $(T,k)$ & Statistic & $P_d^M$ & $P_d^{\prime M}$ & $P_d^{\prime\prime M}$ & $P_d^{\prime\prime UL}$ & $\widehat{P}_d^{\prime M}$ & $\widehat{P}_d^{\prime\prime M}$ \\
 \midrule
